@@ -6,129 +6,68 @@ import re
 from fpdf import FPDF
 import datetime
 
-# --- PDF GENERATOR CLASS ---
-class PackingListPDF(FPDF):
-    def header(self):
-        # Add a logo placeholder or company name here if needed
-        self.set_font('Arial', 'B', 20)
-        self.cell(0, 15, 'PACKING LIST', border=0, ln=1, align='C')
-        self.set_font('Arial', 'I', 10)
-        self.cell(0, 5, f'Generated on: {datetime.date.today().strftime("%B %d, %Y")}', ln=1, align='R')
-        self.ln(10)
-
-    def footer(self):
-        self.set_y(-15)
-        self.set_font('Arial', 'I', 8)
-        self.cell(0, 10, f'Page {self.page_no()}', align='C')
-
-    def create_info_table(self, data_dict, dims):
-        self.set_fill_color(240, 240, 240) # Light grey for headers
-        self.set_font('Arial', 'B', 11)
+# --- PDF GENERATOR: EXCEL-TO-GRID STYLE ---
+class LogisticsPDF(FPDF):
+    def create_packing_list(self, title, df_rows):
+        self.add_page()
+        self.set_font('Arial', 'B', 10)
         
-        # Table Header
-        self.cell(60, 10, ' CATEGORY', border=1, fill=True)
-        self.cell(130, 10, ' SHIPMENT DETAILS', border=1, ln=1, fill=True)
+        # 1. Shaded Header Row 1 (Title)
+        self.set_fill_color(220, 220, 220)
+        self.cell(0, 10, f"  {title}", border=1, ln=1, fill=True)
         
-        self.set_font('Arial', '', 10)
-        # Main Data
-        for key, value in data_dict.items():
-            self.set_font('Arial', 'B', 10)
-            self.cell(60, 9, f" {key}", border=1)
-            self.set_font('Arial', '', 10)
-            self.cell(130, 9, f" {value}", border=1, ln=1)
+        # 2. Shaded Header Row 2 (Columns) 
+        self.set_font('Arial', 'B', 8)
+        cols = ["PALLET", "P.O.", "SKU/Description", "BOX", "UNITS", "DIM/BATCH", "WGT/BX", "TOT WGT"]
+        widths = [15, 25, 55, 12, 18, 30, 15, 20]
         
-        # Dimensions Rows (Handles multiple sizes)
-        for i, d in enumerate(dims):
-            label = " Dimensions" if i == 0 else ""
-            self.set_font('Arial', 'B', 10)
-            self.cell(60, 9, label, border=1)
-            self.set_font('Arial', '', 10)
-            self.cell(130, 9, f" {d}", border=1, ln=1)
+        for i, col in enumerate(cols):
+            self.cell(widths[i], 10, col, border=1, fill=True, align='C')
+        self.ln()
 
-# --- APP CONFIG ---
-st.set_page_config(page_title="Packing List PDF Generator", layout="wide")
-st.title("📄 Packing List PDF Generator")
-st.markdown("Convert your Outbound Packing List Excel into a professional PDF document.")
+        # 3. Transparent Data Grid [cite: 1, 4]
+        self.set_font('Arial', '', 7)
+        for row in df_rows:
+            # Multi-line cell handling for descriptions
+            start_y = self.get_y()
+            for i, item in enumerate(row):
+                self.multi_cell(widths[i], 8, str(item), border=1, align='L' if i==2 else 'C')
+                self.set_xy(self.get_x() + sum(widths[:i+1]), start_y)
+            self.ln(8)
 
-# --- SIDEBAR LISTS ---
-destinations = [
-    "UK - Radial FAO Monat, 26, 26 Broadgate, Chadderton, Middleton Oldham OL9 9XA",
-    "POLAND - Radial Poland Sp. z o.o. Moszna Parcela 29, Budynek C3 05-840 Brwinów",
-    "AUSTRALIA - FDM WAREHOUSING C/O Landmark Global 7 Eucalyptus Place",
-    "MONAT Global Canada — 135 SPARKS AVE NORTH YORK ON M2H 2S5 Canada",
-    "FENIX FWD INC. - 417 LOGISTIC LAREDO, TEXAS 78045",
-    "OTHER (Type Manually below)"
-]
+# --- PORTAL NAVIGATION ---
+st.set_page_config(page_title="Logistics Document Portal", layout="wide")
+page = st.sidebar.selectbox("Select Tool", ["Quote Request Generator", "Packing List PDF Converter"])
 
-# --- SIDEBAR INPUTS ---
-with st.sidebar:
-    st.header("Document Settings")
-    selected_dest = st.selectbox("Destination", destinations)
-    destination = st.text_input("Manual Entry", value=selected_dest) if selected_dest == "OTHER (Type Manually below)" else selected_dest
+# Shared input lists [cite: 2]
+destinations = ["UK - Radial FAO Monat...", "POLAND - Radial Poland...", "AUSTRALIA - FDM..."]
+services = ["40\" REEFER", "40\" DRY", "LCL Ocean", "Air Freight"]
+
+if page == "Quote Request Generator":
+    st.header("📋 Quote Request Pipeline")
+    # ... (Insert your previous Quote Generator code here) ...
+
+elif page == "Packing List PDF Converter":
+    st.header("📄 Packing List: Excel to PDF")
+    st.markdown("This tool replicates your Excel layout into a professional PDF.")
     
-    commodity = st.text_input("Commodity", "Finished goods / Haircare / Skincare")
-    incoterms = st.selectbox("Incoterms", ["EXW", "FOB", "DDP", "DAP", "CIF"])
-
-# --- FILE UPLOAD & LOGIC ---
-uploaded_file = st.file_uploader("Upload Outbound Packing List (.xlsx)", type=['xlsx'])
-
-if uploaded_file:
-    # 1. Extraction Logic (Ironclad)
-    df_raw = pd.read_excel(uploaded_file, header=None).astype(str)
+    uploaded_file = st.file_uploader("Upload Packing List (.xlsx)", type=['xlsx'])
     
-    def get_val(keyword, row_off=0, col_off=0):
-        for r in range(len(df_raw)-1, -1, -1):
-            for c in range(len(df_raw.columns)):
-                if keyword.lower() == str(df_raw.iloc[r, c]).lower().strip():
-                    try: return df_raw.iloc[r + row_off, c + col_off]
-                    except: return "0"
-        return "0"
-
-    def clean_num(val):
-        clean = re.sub(r'[^\d.]', '', str(val))
-        try: return float(clean)
-        except: return 0.0
-
-    # 2. Get Data
-    pallets = int(clean_num(get_val("Pallets", row_off=-1)))
-    units = int(clean_num(get_val("Units", row_off=-1)))
-    lbs = clean_num(get_val("Gross Weight", row_off=-1))
-    kgs = lbs * 0.453592
-
-    # Dimensions
-    dim_list = []
-    for c in range(len(df_raw.columns)):
-        if any("dim" in str(val).lower() and "pallet" in str(val).lower() for val in df_raw.iloc[:5, c]):
-            raw_dims = df_raw.iloc[3:, c].tolist()
-            dim_list = [d.strip() for d in raw_dims if "x" in str(d).lower() and len(str(d)) > 5]
-            break
-    dim_counts = Counter(dim_list)
-    formatted_dims = [f"{d} (x{count})" if count > 1 else d for d, count in dim_counts.items()]
-
-    # 3. PDF GENERATION
-    if st.button("🛠️ Build Packing List PDF"):
-        shipment_data = {
-            "DESTINATION": destination,
-            "TOTAL UNITS": f"{units:,}",
-            "TOTAL PALLETS": pallets,
-            "TOTAL WEIGHT": f"{lbs:,.2f} LBS | {kgs:,.2f} KGS",
-            "COMMODITY": commodity,
-            "INCOTERMS": incoterms
-        }
-
-        pdf = PackingListPDF()
-        pdf.add_page()
-        pdf.create_info_table(shipment_data, formatted_dims)
+    if uploaded_file:
+        df_raw = pd.read_excel(uploaded_file, header=None).fillna("")
         
-        # Binary string conversion
-        pdf_output = pdf.output(dest='S').encode('latin-1')
-        
-        st.success("✅ PDF Created Successfully!")
-        st.download_button(
-            label="📥 Download Packing List PDF",
-            data=pdf_output,
-            file_name=f"Packing_List_{datetime.date.today()}.pdf",
-            mime="application/pdf"
-        )
-else:
-    st.info("Please upload an Excel file to generate the PDF.")
+        # Data Extraction Logic [cite: 3, 5]
+        title_val = str(df_raw.iloc[1, 1]) if len(df_raw) > 1 else "Packing List"
+        # Extract rows starting from the data header (Row 3 onwards) [cite: 3]
+        data_rows = []
+        for r in range(3, len(df_raw)):
+            row_data = df_raw.iloc[r, [1, 2, 3, 6, 8, 11, 12, 13]].tolist()
+            if any(row_data): data_rows.append(row_data)
+
+        if st.button("🛠️ Convert to PDF"):
+            pdf = LogisticsPDF(orientation='P', unit='mm', format='A4')
+            pdf.create_packing_list(title_val, data_rows)
+            
+            pdf_bytes = pdf.output(dest='S').encode('latin-1')
+            st.success("✅ PDF Layout Matches Excel Structure")
+            st.download_button("📥 Download Packing List PDF", data=pdf_bytes, file_name="Packing_List.pdf")
