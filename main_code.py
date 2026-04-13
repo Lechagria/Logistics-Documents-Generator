@@ -35,10 +35,8 @@ def get_hts_data():
     try:
         current_folder = os.path.dirname(os.path.abspath(__file__))
         file_path = os.path.join(current_folder, "Cleaned_HTS_Codes.csv")
-        
         df = pd.read_csv(file_path, dtype=str)
         df.columns = [str(c).strip() for c in df.columns]
-        
         mapping = {}
         for _, row in df.iterrows():
             sku = clean_sku(row.get('SKU', ''))
@@ -51,6 +49,20 @@ def get_hts_data():
     except Exception:
         return {}
 
+# Callback to handle live updates
+def update_invoice_state():
+    """Applies edits from the data_editor to the session state and recalculates Totals."""
+    if "invoice_editor" in st.session_state:
+        edits = st.session_state["invoice_editor"]["edited_rows"]
+        for row_idx, changes in edits.items():
+            for col_name, new_val in changes.items():
+                st.session_state.df_invoice.at[row_idx, col_name] = new_val
+            
+            # Recalculate Total for the modified row immediately
+            q = st.session_state.df_invoice.at[row_idx, "Quantity"]
+            p = st.session_state.df_invoice.at[row_idx, "Unit Price"]
+            st.session_state.df_invoice.at[row_idx, "Total"] = round(q * p, 2)
+
 # ==========================================
 # 2. MAIN APP
 # ==========================================
@@ -62,12 +74,11 @@ hts_mapping = get_hts_data()
 
 if page == "Invoice Line Item Extractor":
     st.title("🧾 Invoice Line Item Extractor")
-    st.markdown("Edit **HTS**, **Origin**, or **Unit Price**. The **Total** column updates automatically in both tables.")
+    st.markdown("Edit **HTS**, **Origin**, or **Unit Price**. Changes will reflect in both tables immediately.")
     
     sap_file = st.file_uploader("Upload SAP Export", type=['csv', 'xlsx'])
 
     if sap_file:
-        # Load and process data into Session State
         if 'df_invoice' not in st.session_state:
             raw_df = pd.read_csv(sap_file) if sap_file.name.endswith('.csv') else pd.read_excel(sap_file)
             raw_df.columns = [str(col).strip() for col in raw_df.columns]
@@ -76,7 +87,6 @@ if page == "Invoice Line Item Extractor":
             for _, row in raw_df.iterrows():
                 sku = clean_sku(row.get('Material', ''))
                 if not sku: continue
-                    
                 sap_desc = str(row.get('Short Text', '')).strip()
                 qty = clean_numeric(row.get('Order Quantity', 0))
                 raw_net = clean_numeric(row.get('Net Price', 0))
@@ -97,11 +107,12 @@ if page == "Invoice Line Item Extractor":
                 })
             st.session_state.df_invoice = pd.DataFrame(invoice_rows)
 
-        # 1. DISPLAY EDITABLE TABLE
+        # 1. DISPLAY EDITABLE TABLE WITH CALLBACK
         st.subheader("Detailed Line Items (Editable)")
         
-        # Capture the edited dataframe
-        edited_df = st.data_editor(
+        # We display everything except the hidden internal description
+        # The 'on_change' trigger ensures the math happens the moment you click out of a cell
+        st.data_editor(
             st.session_state.df_invoice.drop(columns=['Customs_Desc_Internal']),
             use_container_width=True,
             hide_index=True,
@@ -109,28 +120,17 @@ if page == "Invoice Line Item Extractor":
                 "Unit Price": st.column_config.NumberColumn(format="$%.3f"),
                 "Total": st.column_config.NumberColumn(format="$%.2f", disabled=True),
                 "Quantity": st.column_config.NumberColumn(disabled=True),
-                "SKU": st.column_config.TextColumn(disabled=True),
-                "Description": st.column_config.TextColumn(disabled=True)
+                "SKU": st.column_config.TextColumn(disabled=True)
             },
-            key="invoice_editor"
+            key="invoice_editor",
+            on_change=update_invoice_state
         )
 
-        # 2. FORCE RECALCULATION FOR DETAILED VIEW
-        # This line ensures the 'Total' column in the visible table is recalculated immediately
-        edited_df["Total"] = (edited_df["Quantity"] * edited_df["Unit Price"]).round(2)
-
-        # 3. HTS SUMMARY (Calculated from edited data)
+        # 2. HTS SUMMARY (Calculated from updated session state)
         st.divider()
         st.subheader("📊 HTS Summary (Customs Totals)")
         
-        # Merge descriptions back for the summary table
-        summary_base = edited_df.merge(
-            st.session_state.df_invoice[['SKU', 'Customs_Desc_Internal']], 
-            on='SKU', 
-            how='left'
-        )
-        
-        summary_grouped = summary_base.groupby(['HTS Code', 'Customs_Desc_Internal']).agg({
+        summary_grouped = st.session_state.df_invoice.groupby(['HTS Code', 'Customs_Desc_Internal']).agg({
             'Quantity': 'sum',
             'Total': 'sum'
         }).reset_index()
@@ -143,19 +143,19 @@ if page == "Invoice Line Item Extractor":
             hide_index=True
         )
         
-        # 4. DOWNLOAD
+        # 3. DOWNLOAD
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-            edited_df.to_excel(writer, index=False, sheet_name="Line_Items")
+            st.session_state.df_invoice.drop(columns=['Customs_Desc_Internal']).to_excel(writer, index=False, sheet_name="Line_Items")
             summary_grouped.to_excel(writer, index=False, sheet_name="HTS_Summary")
         
         st.download_button("📥 Download Final Document", excel_buffer.getvalue(), "Custom_Invoice_Summary.xlsx")
 
-    if st.button("Clear All Data"):
+    if st.sidebar.button("🗑️ Clear and Reset"):
         if 'df_invoice' in st.session_state:
             del st.session_state.df_invoice
             st.rerun()
 
 elif page == "Quote Request Generator":
     st.title("📦 Quote Request Pipeline")
-    st.info("Upload files to begin generating quote requests.")
+    st.info("Upload files to begin.")
