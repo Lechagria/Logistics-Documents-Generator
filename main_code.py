@@ -48,32 +48,11 @@ def get_hts_data():
                     "customs_desc": str(row.get('Description', '')).strip()
                 }
         return mapping
-    except Exception as e:
+    except Exception:
         return {}
 
 # ==========================================
-# 2. PDF GENERATOR (For Tool 1)
-# ==========================================
-class QuotePDF(FPDF):
-    def header(self):
-        self.set_font('Arial', 'B', 16)
-        self.cell(0, 15, 'QUOTE REQUEST', border=0, ln=1, align='C')
-        self.ln(10)
-
-    def create_table(self, data_dict, dims):
-        self.set_fill_color(230, 230, 230)
-        self.set_font('Arial', 'B', 10)
-        self.cell(60, 10, ' CATEGORY', border=1, fill=True)
-        self.cell(130, 10, ' SHIPMENT DETAILS', border=1, ln=1, fill=True)
-        self.set_font('Arial', '', 10)
-        for key, value in data_dict.items():
-            self.set_font('Arial', 'B', 10)
-            self.cell(60, 9, f" {key}", border=1)
-            self.set_font('Arial', '', 10)
-            self.cell(130, 9, f" {value}", border=1, ln=1)
-
-# ==========================================
-# 3. MAIN APP
+# 2. MAIN APP
 # ==========================================
 st.set_page_config(page_title="Logistics Document Portal", layout="wide")
 st.sidebar.title("📑 Logistics Tools")
@@ -81,19 +60,15 @@ page = st.sidebar.selectbox("Select Tool", ["Quote Request Generator", "Invoice 
 
 hts_mapping = get_hts_data()
 
-if page == "Quote Request Generator":
-    st.title("📦 Quote Request Pipeline")
-    # (Existing Quote Logic)
-
-elif page == "Invoice Line Item Extractor":
+if page == "Invoice Line Item Extractor":
     st.title("🧾 Invoice Line Item Extractor")
-    st.markdown("Manually edit **HTS**, **Origin**, or **Unit Price**. The **Total** column will update automatically.")
+    st.markdown("Edit **HTS**, **Origin**, or **Unit Price**. The **Total** column updates automatically in both tables.")
     
     sap_file = st.file_uploader("Upload SAP Export", type=['csv', 'xlsx'])
 
     if sap_file:
-        # Load data once and store in session state
-        if 'df_invoice' not in st.session_state or st.sidebar.button("Reload File"):
+        # Load and process data into Session State
+        if 'df_invoice' not in st.session_state:
             raw_df = pd.read_csv(sap_file) if sap_file.name.endswith('.csv') else pd.read_excel(sap_file)
             raw_df.columns = [str(col).strip() for col in raw_df.columns]
             
@@ -108,8 +83,6 @@ elif page == "Invoice Line Item Extractor":
                 u_price = round(raw_net / 1000, 3)
                 
                 sku_info = hts_mapping.get(sku, {"hts": "", "customs_desc": ""})
-                
-                # Default Origin Logic
                 origin = "USA" if sku.startswith('600') else "CHINA" if sku.startswith('300') else ""
                 
                 invoice_rows.append({
@@ -124,32 +97,33 @@ elif page == "Invoice Line Item Extractor":
                 })
             st.session_state.df_invoice = pd.DataFrame(invoice_rows)
 
-        # 1. THE EDITABLE TABLE
+        # 1. DISPLAY EDITABLE TABLE
         st.subheader("Detailed Line Items (Editable)")
         
-        # Display editor
+        # Capture the edited dataframe
         edited_df = st.data_editor(
             st.session_state.df_invoice.drop(columns=['Customs_Desc_Internal']),
             use_container_width=True,
             hide_index=True,
             column_config={
                 "Unit Price": st.column_config.NumberColumn(format="$%.3f"),
-                "Total": st.column_config.NumberColumn(format="$%.2f", disabled=True), # We calculate this automatically
+                "Total": st.column_config.NumberColumn(format="$%.2f", disabled=True),
                 "Quantity": st.column_config.NumberColumn(disabled=True),
-                "SKU": st.column_config.TextColumn(disabled=True)
+                "SKU": st.column_config.TextColumn(disabled=True),
+                "Description": st.column_config.TextColumn(disabled=True)
             },
             key="invoice_editor"
         )
 
-        # 2. AUTOMATIC CALCULATION FOR DETAILED LINE
-        # This line updates the "Total" in the visible table immediately
+        # 2. FORCE RECALCULATION FOR DETAILED VIEW
+        # This line ensures the 'Total' column in the visible table is recalculated immediately
         edited_df["Total"] = (edited_df["Quantity"] * edited_df["Unit Price"]).round(2)
 
-        # 3. HTS SUMMARY
+        # 3. HTS SUMMARY (Calculated from edited data)
         st.divider()
         st.subheader("📊 HTS Summary (Customs Totals)")
         
-        # Merge internal descriptions back for summary grouping
+        # Merge descriptions back for the summary table
         summary_base = edited_df.merge(
             st.session_state.df_invoice[['SKU', 'Customs_Desc_Internal']], 
             on='SKU', 
@@ -177,7 +151,11 @@ elif page == "Invoice Line Item Extractor":
         
         st.download_button("📥 Download Final Document", excel_buffer.getvalue(), "Custom_Invoice_Summary.xlsx")
 
-    if st.button("Clear Data"):
+    if st.button("Clear All Data"):
         if 'df_invoice' in st.session_state:
             del st.session_state.df_invoice
             st.rerun()
+
+elif page == "Quote Request Generator":
+    st.title("📦 Quote Request Pipeline")
+    st.info("Upload files to begin generating quote requests.")
