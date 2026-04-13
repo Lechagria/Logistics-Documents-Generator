@@ -31,11 +31,12 @@ def clean_sku(val):
         return ""
     return s
 
-@st.cache_data
 def get_hts_map():
-    """Loads the HTS codes and aggressively formats the keys for matching."""
+    """Loads HTS codes fresh without caching to prevent stale blank data."""
     try:
-        df = pd.read_csv("HTS Codes.xlsx - Sheet1.csv")
+        # Force all columns to be read as plain text instantly
+        df = pd.read_csv("HTS Codes.xlsx - Sheet1.csv", dtype=str)
+        
         # Ensure there are no hidden spaces in the column headers
         df.columns = df.columns.str.strip()
         
@@ -45,7 +46,12 @@ def get_hts_map():
         
         # Create the dictionary only for valid rows
         return df[df['Material'] != ""].set_index('Material')['Ext. Material Grp'].to_dict()
+    
+    except FileNotFoundError:
+        st.error("⚠️ **ERROR:** The file `HTS Codes.xlsx - Sheet1.csv` was not found in the same folder as this app. HTS matching will be blank.")
+        return {}
     except Exception as e:
+        st.error(f"⚠️ **ERROR:** Something went wrong reading the HTS file: {e}")
         return {}
 
 # ==========================================
@@ -88,6 +94,7 @@ st.set_page_config(page_title="Logistics Document Portal", layout="wide")
 st.sidebar.title("📑 Logistics Tools")
 page = st.sidebar.selectbox("Select Tool", ["Quote Request Generator", "Invoice Line Item Extractor"])
 
+# Load HTS map fresh every time
 hts_map = get_hts_map()
 
 # --- TOOL 1: QUOTE REQUEST GENERATOR ---
@@ -211,10 +218,10 @@ elif page == "Invoice Line Item Extractor":
             u_price = raw_net / 1000
             total_val = qty * u_price
             
-            # Map HTS Code securely (it will now match cleanly)
+            # Map HTS Code securely
             hts_code = hts_map.get(sku, "")
             
-            # Append to our new clean list (Pallet column removed)
+            # Append to our new clean list (Pallet column successfully removed)
             invoice_rows.append({
                 "SKU": sku,
                 "HTS Code": hts_code,
