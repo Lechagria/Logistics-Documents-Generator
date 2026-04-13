@@ -205,13 +205,20 @@ elif page == "Invoice Line Item Extractor":
             qty = clean_numeric(row.get('Order Quantity', 0))
             raw_net = clean_numeric(row.get('Net Price', 0))
             
+            # Math: Unit Price calculation
             u_price = raw_net / 1000
             total_val = qty * u_price
             
+            # Map HTS Code
             hts_code = hts_map.get(sku, "")
             
-            # --- ORIGIN RULE: Only '600' starts with USA ---
-            origin = "USA" if sku.startswith('600') else ""
+            # --- ORIGIN RULES ---
+            if sku.startswith('600'):
+                origin = "USA"
+            elif sku.startswith('300'):
+                origin = "CHINA"
+            else:
+                origin = ""
             
             invoice_rows.append({
                 "SKU": sku,
@@ -227,16 +234,42 @@ elif page == "Invoice Line Item Extractor":
             df_final = pd.DataFrame(invoice_rows)
             st.success(f"✅ Successfully extracted {len(df_final)} line items!")
             
+            # Display Main Table
+            st.subheader("Detailed Line Items")
             st.dataframe(df_final, use_container_width=True, hide_index=True)
             
+            # --- HTS SUMMARY TABLE (SUMIF LOGIC) ---
+            st.divider()
+            st.subheader("📊 HTS Summary (Customs Totals)")
+            
+            df_summary = df_final.copy()
+            # Strip formatting to perform math
+            df_summary['NumericTotal'] = df_summary['Total'].replace('[\$,]', '', regex=True).astype(float)
+            
+            # Group by HTS Code
+            summary_grouped = df_summary.groupby('HTS Code').agg({
+                'Quantity': 'sum',
+                'NumericTotal': 'sum'
+            }).reset_index()
+            
+            summary_grouped.columns = ['HTS Code', 'Total Quantity', 'Total Value']
+            
+            # Re-format for display
+            display_summary = summary_grouped.copy()
+            display_summary['Total Value'] = display_summary['Total Value'].apply(lambda x: f"${x:,.2f}")
+            
+            st.dataframe(display_summary, use_container_width=True, hide_index=True)
+            
+            # Create Excel with two sheets
             excel_buffer = io.BytesIO()
             with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                df_final.to_excel(writer, index=False, sheet_name="Extracted_Items")
+                df_final.to_excel(writer, index=False, sheet_name="Line_Items")
+                summary_grouped.to_excel(writer, index=False, sheet_name="HTS_Summary")
             
             st.download_button(
-                label="📥 Download as Excel File",
+                label="📥 Download Excel with Summary",
                 data=excel_buffer.getvalue(),
-                file_name="Extracted_Line_Items.xlsx",
+                file_name="Invoice_Extraction_Summary.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         else:
