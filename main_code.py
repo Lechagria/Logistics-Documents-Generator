@@ -39,7 +39,7 @@ def get_hts_map():
         current_folder = os.path.dirname(os.path.abspath(__file__))
         
         # 2. Attach the NEW file name 
-        file_path = os.path.join(current_folder, "HTS_Codes.csv")
+        file_path = os.path.join(current_folder, "Cleaned_HTS_Codes.csv")
         
         # 3. Read the file
         df = pd.read_csv(file_path, dtype=str)
