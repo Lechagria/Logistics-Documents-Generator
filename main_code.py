@@ -6,7 +6,7 @@ from fpdf import FPDF
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 
-# --- PDF GENERATOR (REPLICATING YOUR TEMPLATE) ---
+# --- PDF GENERATOR: REPLICATING PRO-FORMA TEMPLATE ---
 class ProFormaPDF(FPDF):
     def create_invoice(self, df, dest_info, po_ref):
         self.add_page()
@@ -48,27 +48,28 @@ class ProFormaPDF(FPDF):
         self.cell(140, 5, "INCOTERMS:  CIF", align='R')
         self.ln(5)
 
-        # Table
+        # Table Header
         cols = ["SKU", "HTS Code", "Origin", "Description", "Quantity", "Unit Price", "Total"]
         widths = [20, 25, 15, 65, 15, 25, 25]
         for i, col in enumerate(cols):
             self.cell(widths[i], 8, col, border=1, fill=True, align='C')
         self.ln()
 
+        # Table Data
         self.set_font('Arial', '', 7)
         grand_total = 0
         for _, row in df.iterrows():
-            val = float(row['Total'])
-            grand_total += val
+            total_val = float(row['Total'])
+            grand_total += total_val
             self.cell(widths[0], 7, str(row['SKU']), border=1)
             self.cell(widths[1], 7, str(row['HTS']), border=1, align='C')
             self.cell(widths[2], 7, "USA", border=1, align='C')
             self.cell(widths[3], 7, str(row['Description'])[:45], border=1)
             self.cell(widths[4], 7, str(row['Qty']), border=1, align='C')
             self.cell(widths[5], 7, f"${row['Unit Price']:.3f}", border=1, align='R')
-            self.cell(widths[6], 7, f"${val:,.2f}", border=1, align='R', ln=1)
+            self.cell(widths[6], 7, f"${total_val:,.2f}", border=1, align='R', ln=1)
 
-        # Sub-Total
+        # Total
         self.set_font('Arial', 'B', 8)
         self.cell(sum(widths[:-1]), 10, "SUB-TOTAL (USD)", border=1, align='R')
         self.cell(widths[-1], 10, f"${grand_total:,.2f}", border=1, align='R', ln=1)
@@ -77,81 +78,94 @@ class ProFormaPDF(FPDF):
         self.ln(5)
         self.set_font('Arial', 'I', 6)
         disclaimer = ("THIS DELIVERY BECOMES A CONTRACT AND IS FIRM AND NON-CANCELABLE. PURCHASER AGREES TO PAY ANY AND ALL COURT COST. "
-                      "ATTORNEY'S FEES AND INTEREST IN CONNECTION WITH ANY LEGAL SERVICES INCURRED BY THE SELLER... ALL BILLS ARE PAYABLE "
-                      "AND DUE IN ACCORD WITH TERMS HEREON INDICATED.")
+                      "ATTORNEY'S FEES AND INTEREST IN CONNECTION WITH ANY LEGAL SERVICES INCURRED BY THE SELLER...")
         self.multi_cell(0, 3, disclaimer)
 
-# --- EXCEL GENERATOR (STYLIZED) ---
-def create_stylized_excel(df, po_ref, dest_info):
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Commercial Invoice"
-    
-    # Simple formatting logic to mirror the template
-    ws.merge_cells('A1:G1')
-    ws['A1'] = "PRO-FORMA INVOICE"
-    ws['A1'].font = Font(bold=True, size=14)
-    ws['A1'].alignment = Alignment(horizontal='center')
-    
-    # Column Headers
-    headers = ["SKU", "HTS Code", "Origin", "Description", "Quantity", "Unit Price", "Total"]
-    ws.append(headers)
-    
-    for r in df.values.tolist():
-        ws.append(r)
-        
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
-
-# --- STREAMLIT FRONTEND ---
+# --- PORTAL APP ---
 st.set_page_config(page_title="Logistics Portal", layout="wide")
-st.sidebar.title("Tools")
-page = st.sidebar.selectbox("Select Tool", ["Quote Generator", "Commercial Invoice Generator"])
 
+# Persistent HTS Lookup
 @st.cache_data
-def load_hts_map():
+def get_hts_map():
     try:
-        df = pd.read_csv("HTS Codes.xlsx - Sheet1.csv")
-        return df.set_index('Material')['Ext. Material Grp'].to_dict()
-    except: return {}
+        # Load your HTS master file
+        hts_df = pd.read_csv("HTS Codes.xlsx - Sheet1.csv")
+        return hts_df.set_index('Material')['Ext. Material Grp'].to_dict()
+    except Exception as e:
+        st.warning(f"HTS Master file not found. Automatic lookup disabled. Error: {e}")
+        return {}
 
-hts_map = load_hts_map()
+hts_map = get_hts_map()
+
+# Sidebar Navigation
+page = st.sidebar.selectbox("Select Tool", ["Commercial Invoice Generator", "Quote Generator"])
 
 if page == "Commercial Invoice Generator":
-    st.header("🧾 Pro-Forma Invoice Generator")
-    dest_box = st.text_area("Consignee Address", "MONAT GLOBAL CANADA\n135 SPARKS AVENUE\nNorth York, ON M2H 2S5")
-    sap_file = st.file_uploader("Upload SAP Export", type=['csv', 'xlsx'])
+    st.header("🧾 Commercial Invoice Generator")
+    
+    with st.expander("Settings", expanded=True):
+        dest_info = st.text_area("Consignee Address", "MONAT GLOBAL CANADA\n135 SPARKS AVENUE\nNorth York, ON M2H 2S5")
+    
+    sap_file = st.file_uploader("Upload SAP Export (EXPORT-1.xlsx)", type=['csv', 'xlsx'])
 
     if sap_file:
-        raw_df = pd.read_csv(sap_file) if sap_file.name.endswith('.csv') else pd.read_excel(sap_file)
+        # Load SAP Data
+        if sap_file.name.endswith('.csv'):
+            raw_df = pd.read_csv(sap_file)
+        else:
+            raw_df = pd.read_excel(sap_file)
+
+        # --- FUZZY COLUMN MATCHING ---
+        # Strip invisible spaces from column names to avoid KeyErrors
+        raw_df.columns = [str(col).strip() for col in raw_df.columns]
         
-        data = []
-        for _, r in raw_df.iterrows():
-            u_price = float(r['Net Price']) / 1000
-            qty = r['Order Quantity']
-            data.append({
-                "SKU": r['Material'], "HTS": hts_map.get(r['Material'], ""),
-                "Description": r['Short Text'], "Qty": qty,
-                "Unit Price": u_price, "Total": qty * u_price
+        invoice_rows = []
+        for _, row in raw_df.iterrows():
+            # Fallback logic for column names
+            sku = str(row.get('Material', ''))
+            net_price = float(row.get('Net Price', 0))
+            qty = row.get('Order Quantity', 0)
+            description = row.get('Short Text', '')
+            
+            # Logic: Net Price / 1000
+            u_price = net_price / 1000
+            total_val = qty * u_price
+            
+            # XLOOKUP logic for HTS
+            hts_code = hts_map.get(row.get('Material'), "")
+            
+            invoice_rows.append({
+                "SKU": sku,
+                "HTS": hts_code,
+                "Description": description,
+                "Qty": qty,
+                "Unit Price": u_price,
+                "Total": total_val
             })
         
-        edit_df = st.data_editor(pd.DataFrame(data))
+        # Editable Grid for Manual Corrections
+        st.subheader("Data Preview")
+        st.caption("You can edit HTS codes or Prices directly in the table below.")
+        df_final = st.data_editor(pd.DataFrame(invoice_rows), num_rows="dynamic")
 
-        if st.button("🚀 Generate Documents"):
-            po_val = str(raw_df.iloc[0]['Purchasing Document'])
+        if st.button("🚀 Generate Final Documents"):
+            po_ref = str(raw_df.iloc[0].get('Purchasing Document', 'UNKNOWN'))
             
-            # Generate PDF
+            # 1. Generate PDF
             pdf = ProFormaPDF()
-            pdf.create_invoice(edit_df, dest_box, po_val)
-            pdf_bytes = pdf.output(dest='S').encode('latin-1')
+            pdf.create_invoice(df_final, dest_info, po_ref)
+            pdf_output = pdf.output(dest='S').encode('latin-1')
             
-            # Generate Excel
-            xl_bytes = create_stylized_excel(edit_df, po_val, dest_box)
-
+            # 2. Generate Excel
+            xl_output = io.BytesIO()
+            with pd.ExcelWriter(xl_output, engine='openpyxl') as writer:
+                df_final.to_excel(writer, index=False, sheet_name="Invoice")
+            
             st.divider()
-            col1, col2 = st.columns(2)
-            with col1:
-                st.download_button("📥 Download PDF", pdf_bytes, f"Invoice_{po_val}.pdf")
-            with col2:
-                st.download_button("📥 Download Excel", xl_bytes, f"Invoice_{po_val}.xlsx")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.download_button("📥 Download PDF Invoice", pdf_output, f"Invoice_{po_ref}.pdf", "application/pdf")
+            with c2:
+                st.download_button("📥 Download Excel Invoice", xl_output.getvalue(), f"Invoice_{po_ref}.xlsx")
+
+# (Previous Quote Generator code can be added in a separate 'if' block here)
