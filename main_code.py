@@ -31,7 +31,7 @@ def clean_sku(val):
     return s
 
 def get_hts_data():
-    """Loads SKU mapping from Cleaned_HTS_Codes.csv with robust header handling."""
+    """Loads SKU mapping from Cleaned_HTS_Codes.csv."""
     try:
         current_folder = os.path.dirname(os.path.abspath(__file__))
         file_path = os.path.join(current_folder, "Cleaned_HTS_Codes.csv")
@@ -49,7 +49,6 @@ def get_hts_data():
                 }
         return mapping
     except Exception as e:
-        st.error(f"⚠️ **FILE ERROR:** Could not read 'Cleaned_HTS_Codes.csv'. Check if header is 'Description'.")
         return {}
 
 # ==========================================
@@ -74,7 +73,7 @@ class QuotePDF(FPDF):
             self.cell(130, 9, f" {value}", border=1, ln=1)
 
 # ==========================================
-# 3. STREAMLIT APP & NAVIGATION
+# 3. MAIN APP
 # ==========================================
 st.set_page_config(page_title="Logistics Document Portal", layout="wide")
 st.sidebar.title("📑 Logistics Tools")
@@ -82,110 +81,103 @@ page = st.sidebar.selectbox("Select Tool", ["Quote Request Generator", "Invoice 
 
 hts_mapping = get_hts_data()
 
-# --- TOOL 1: QUOTE REQUEST GENERATOR ---
 if page == "Quote Request Generator":
     st.title("📦 Quote Request Pipeline")
-    # (Quote logic remains the same as your previous working version)
-    # [Omitted here for brevity, keep your original Tool 1 code block here]
+    # (Existing Quote Logic)
 
-# --- TOOL 2: INVOICE LINE ITEM EXTRACTOR ---
 elif page == "Invoice Line Item Extractor":
     st.title("🧾 Invoice Line Item Extractor")
-    st.markdown("You can **manually edit** HTS, Origin, and Unit Price in the table. Totals will update automatically.")
+    st.markdown("Manually edit **HTS**, **Origin**, or **Unit Price**. The **Total** column will update automatically.")
     
     sap_file = st.file_uploader("Upload SAP Export", type=['csv', 'xlsx'])
 
     if sap_file:
-        raw_df = pd.read_csv(sap_file) if sap_file.name.endswith('.csv') else pd.read_excel(sap_file)
-        raw_df.columns = [str(col).strip() for col in raw_df.columns]
-        
-        invoice_rows = []
-        for _, row in raw_df.iterrows():
-            sku = clean_sku(row.get('Material', ''))
-            if not sku: continue
+        # Load data once and store in session state
+        if 'df_invoice' not in st.session_state or st.sidebar.button("Reload File"):
+            raw_df = pd.read_csv(sap_file) if sap_file.name.endswith('.csv') else pd.read_excel(sap_file)
+            raw_df.columns = [str(col).strip() for col in raw_df.columns]
+            
+            invoice_rows = []
+            for _, row in raw_df.iterrows():
+                sku = clean_sku(row.get('Material', ''))
+                if not sku: continue
+                    
+                sap_desc = str(row.get('Short Text', '')).strip()
+                qty = clean_numeric(row.get('Order Quantity', 0))
+                raw_net = clean_numeric(row.get('Net Price', 0))
+                u_price = round(raw_net / 1000, 3)
                 
-            sap_desc = str(row.get('Short Text', '')).strip()
-            qty = clean_numeric(row.get('Order Quantity', 0))
-            raw_net = clean_numeric(row.get('Net Price', 0))
-            u_price = round(raw_net / 1000, 3) # Starting unit price
-            
-            sku_info = hts_mapping.get(sku, {"hts": "", "customs_desc": ""})
-            
-            # Default Origin Logic
-            if sku.startswith('600'): origin = "USA"
-            elif sku.startswith('300'): origin = "CHINA"
-            else: origin = ""
-            
-            invoice_rows.append({
-                "SKU": sku,
-                "HTS Code": sku_info["hts"],
-                "Origin": origin,
-                "Description": sap_desc,
-                "Quantity": int(qty),
-                "Unit Price": u_price,
-                "Total": round(qty * u_price, 2),
-                "Customs_Desc_Internal": sku_info["customs_desc"]
-            })
+                sku_info = hts_mapping.get(sku, {"hts": "", "customs_desc": ""})
+                
+                # Default Origin Logic
+                origin = "USA" if sku.startswith('600') else "CHINA" if sku.startswith('300') else ""
+                
+                invoice_rows.append({
+                    "SKU": sku,
+                    "HTS Code": sku_info["hts"],
+                    "Origin": origin,
+                    "Description": sap_desc,
+                    "Quantity": int(qty),
+                    "Unit Price": u_price,
+                    "Total": round(qty * u_price, 2),
+                    "Customs_Desc_Internal": sku_info["customs_desc"]
+                })
+            st.session_state.df_invoice = pd.DataFrame(invoice_rows)
+
+        # 1. THE EDITABLE TABLE
+        st.subheader("Detailed Line Items (Editable)")
         
-        if invoice_rows:
-            # 1. Prepare editable table
-            df_to_edit = pd.DataFrame(invoice_rows)
-            
-            st.subheader("Detailed Line Items (Editable)")
-            # Using data_editor to allow manual overrides
-            edited_df = st.data_editor(
-                df_to_edit.drop(columns=['Customs_Desc_Internal']),
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "HTS Code": st.column_config.TextColumn("HTS Code"),
-                    "Origin": st.column_config.TextColumn("Origin"),
-                    "Unit Price": st.column_config.NumberColumn("Unit Price", format="$%.3f"),
-                    "Total": st.column_config.NumberColumn("Total", format="$%.2f", disabled=True),
-                    "Quantity": st.column_config.NumberColumn("Quantity", disabled=True),
-                    "SKU": st.column_config.TextColumn("SKU", disabled=True)
-                },
-                key="invoice_editor"
-            )
+        # Display editor
+        edited_df = st.data_editor(
+            st.session_state.df_invoice.drop(columns=['Customs_Desc_Internal']),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Unit Price": st.column_config.NumberColumn(format="$%.3f"),
+                "Total": st.column_config.NumberColumn(format="$%.2f", disabled=True), # We calculate this automatically
+                "Quantity": st.column_config.NumberColumn(disabled=True),
+                "SKU": st.column_config.TextColumn(disabled=True)
+            },
+            key="invoice_editor"
+        )
 
-            # 2. Recalculate Totals based on user manual edits
-            edited_df["Total"] = edited_df["Quantity"] * edited_df["Unit Price"]
+        # 2. AUTOMATIC CALCULATION FOR DETAILED LINE
+        # This line updates the "Total" in the visible table immediately
+        edited_df["Total"] = (edited_df["Quantity"] * edited_df["Unit Price"]).round(2)
 
-            # 3. HTS SUMMARY (Calculated from edited data)
-            st.divider()
-            st.subheader("📊 HTS Summary (Customs Totals)")
-            
-            # Re-merge internal descriptions for the summary calculation
-            summary_base = edited_df.merge(
-                df_to_edit[['SKU', 'Customs_Desc_Internal']], 
-                on='SKU', 
-                how='left'
-            )
-            
-            summary_grouped = summary_base.groupby(['HTS Code', 'Customs_Desc_Internal']).agg({
-                'Quantity': 'sum',
-                'Total': 'sum'
-            }).reset_index()
-            
-            summary_grouped.columns = ['HTS Code', 'Customs Description', 'Total Quantity', 'Total Value']
-            
-            st.dataframe(
-                summary_grouped.style.format({"Total Value": "${:,.2f}"}),
-                use_container_width=True, 
-                hide_index=True
-            )
-            
-            # 4. Download Export including Summary
-            excel_buffer = io.BytesIO()
-            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                edited_df.to_excel(writer, index=False, sheet_name="Line_Items")
-                summary_grouped.to_excel(writer, index=False, sheet_name="HTS_Summary")
-            
-            st.download_button(
-                label="📥 Download Edited Invoice & Summary",
-                data=excel_buffer.getvalue(),
-                file_name="Edited_Invoice_Summary.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-        else:
-            st.warning("No valid SKUs found in the uploaded file.")
+        # 3. HTS SUMMARY
+        st.divider()
+        st.subheader("📊 HTS Summary (Customs Totals)")
+        
+        # Merge internal descriptions back for summary grouping
+        summary_base = edited_df.merge(
+            st.session_state.df_invoice[['SKU', 'Customs_Desc_Internal']], 
+            on='SKU', 
+            how='left'
+        )
+        
+        summary_grouped = summary_base.groupby(['HTS Code', 'Customs_Desc_Internal']).agg({
+            'Quantity': 'sum',
+            'Total': 'sum'
+        }).reset_index()
+        
+        summary_grouped.columns = ['HTS Code', 'Customs Description', 'Total Quantity', 'Total Value']
+        
+        st.dataframe(
+            summary_grouped.style.format({"Total Value": "${:,.2f}"}),
+            use_container_width=True, 
+            hide_index=True
+        )
+        
+        # 4. DOWNLOAD
+        excel_buffer = io.BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            edited_df.to_excel(writer, index=False, sheet_name="Line_Items")
+            summary_grouped.to_excel(writer, index=False, sheet_name="HTS_Summary")
+        
+        st.download_button("📥 Download Final Document", excel_buffer.getvalue(), "Custom_Invoice_Summary.xlsx")
+
+    if st.button("Clear Data"):
+        if 'df_invoice' in st.session_state:
+            del st.session_state.df_invoice
+            st.rerun()
