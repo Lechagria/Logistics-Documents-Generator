@@ -147,7 +147,7 @@ elif page == "Invoice Line Item Extractor":
             }).reset_index()
             
             # Renaming for final output
-            summary_grouped.columns = ['HTS Code', 'Customs Description', 'Total Quantity', 'Total Value']
+            summary_grouped.columns = ['HTS Code', 'Description', 'Total Quantity', 'Total Value']
             
             display_summary = summary_grouped.copy()
             display_summary['Total Value'] = display_summary['Total Value'].apply(lambda x: f"${x:,.2f}")
