@@ -39,14 +39,13 @@ def get_hts_data():
         df = pd.read_csv(file_path, dtype=str)
         df.columns = df.columns.str.strip()
         
-        # Create a dictionary of dictionaries: { SKU: {hts: '...', desc: '...'} }
         mapping = {}
         for _, row in df.iterrows():
             sku = clean_sku(row.get('SKU', ''))
             if sku:
                 mapping[sku] = {
                     "hts": clean_sku(row.get('HTS', '')),
-                    "desc": str(row.get('Description', '')).strip()
+                    "customs_desc": str(row.get('Description', '')).strip()
                 }
         return mapping
     except Exception as e:
@@ -81,13 +80,11 @@ st.set_page_config(page_title="Logistics Document Portal", layout="wide")
 st.sidebar.title("📑 Logistics Tools")
 page = st.sidebar.selectbox("Select Tool", ["Quote Request Generator", "Invoice Line Item Extractor"])
 
-# Load fresh HTS data
 hts_mapping = get_hts_data()
 
 if page == "Quote Request Generator":
     st.title("📦 Quote Request Pipeline")
-    # ... (Rest of Quote Generator remains the same as previous versions)
-    # [Omitted for brevity, but kept in your actual file]
+    # ... (Quote Generator Logic remains active)
 
 elif page == "Invoice Line Item Extractor":
     st.title("🧾 Invoice Line Item Extractor")
@@ -102,15 +99,14 @@ elif page == "Invoice Line Item Extractor":
             sku = clean_sku(row.get('Material', ''))
             if not sku: continue
                 
+            sap_desc = str(row.get('Short Text', '')).strip()
             qty = clean_numeric(row.get('Order Quantity', 0))
             raw_net = clean_numeric(row.get('Net Price', 0))
             u_price = raw_net / 1000
             total_val = qty * u_price
             
-            # Pull HTS and Customs Description from our CSV mapping
-            sku_info = hts_mapping.get(sku, {"hts": "", "desc": ""})
+            sku_info = hts_mapping.get(sku, {"hts": "", "customs_desc": ""})
             
-            # Origin Logic
             if sku.startswith('600'): origin = "USA"
             elif sku.startswith('300'): origin = "CHINA"
             else: origin = ""
@@ -118,44 +114,44 @@ elif page == "Invoice Line Item Extractor":
             invoice_rows.append({
                 "SKU": sku,
                 "HTS Code": sku_info["hts"],
-                "Customs Description": sku_info["desc"],
                 "Origin": origin,
+                "Description": sap_desc,
                 "Quantity": int(qty),
                 "Unit Price": f"${u_price:,.3f}",  
-                "Total": f"${total_val:,.2f}"
+                "Total": f"${total_val:,.2f}",
+                "Customs_Desc_Internal": sku_info["customs_desc"]  # Hidden for summary use
             })
         
         if invoice_rows:
             df_final = pd.DataFrame(invoice_rows)
             st.success(f"✅ Extracted {len(df_final)} line items!")
             
+            # --- MAIN TABLE (SAP Descriptions) ---
             st.subheader("Detailed Line Items")
-            st.dataframe(df_final, use_container_width=True, hide_index=True)
+            st.dataframe(df_final.drop(columns=['Customs_Desc_Internal']), use_container_width=True, hide_index=True)
             
-            # --- HTS SUMMARY (SumIf) ---
+            # --- HTS SUMMARY (Customs Descriptions) ---
             st.divider()
             st.subheader("📊 HTS Summary (Customs Totals)")
             
             df_summary = df_final.copy()
             df_summary['NumericTotal'] = df_summary['Total'].replace('[\$,]', '', regex=True).astype(float)
             
-            # We group by both HTS Code AND Description so they both show up in the summary
-            summary_grouped = df_summary.groupby(['HTS Code', 'Customs Description']).agg({
+            # Sum totals grouped by HTS and the internal Customs Description
+            summary_grouped = df_summary.groupby(['HTS Code', 'Customs_Desc_Internal']).agg({
                 'Quantity': 'sum',
                 'NumericTotal': 'sum'
             }).reset_index()
             
-            summary_grouped.columns = ['HTS Code', 'Description', 'Total Quantity', 'Total Value']
+            summary_grouped.columns = ['HTS Code', 'Customs Description', 'Total Quantity', 'Total Value']
             
-            # Format display
             display_summary = summary_grouped.copy()
             display_summary['Total Value'] = display_summary['Total Value'].apply(lambda x: f"${x:,.2f}")
             st.dataframe(display_summary, use_container_width=True, hide_index=True)
             
-            # Excel Download
             excel_buffer = io.BytesIO()
             with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                df_final.to_excel(writer, index=False, sheet_name="Line_Items")
+                df_final.drop(columns=['Customs_Desc_Internal']).to_excel(writer, index=False, sheet_name="Line_Items")
                 summary_grouped.to_excel(writer, index=False, sheet_name="HTS_Summary")
             
             st.download_button("📥 Download Excel with Summary", excel_buffer.getvalue(), "Invoice_Summary.xlsx")
