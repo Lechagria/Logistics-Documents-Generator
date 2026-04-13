@@ -33,32 +33,32 @@ def clean_sku(val):
     return s
 
 def get_hts_map():
-    """Loads HTS codes dynamically using your new simplified file structure."""
-    try:
-        # 1. Find the exact folder where app.py is currently living
-        current_folder = os.path.dirname(os.path.abspath(__file__))
-        
-        # 2. Attach the NEW file name 
-        file_path = os.path.join(current_folder, "Cleaned_HTS_Codes.csv")
-        
-        # 3. Read the file
-        df = pd.read_csv(file_path, dtype=str)
-        
-        # Clean column headers
-        df.columns = df.columns.str.strip()
-        
-        # Apply the exact same cleaning function to your NEW column names
-        df['SKU'] = df['SKU'].apply(clean_sku)
-        df['HTS'] = df['HTS'].fillna('').apply(clean_sku)
-        
-        # Create the dictionary using SKU as the key and HTS as the value
-        return df[df['SKU'] != ""].set_index('SKU')['HTS'].to_dict()
+    """Loads HTS codes by searching common directory locations."""
+    # List of possible names/locations to check
+    possible_paths = [
+        "HTS_Codes.csv",                                      # Root
+        "LOGISTICS-PORTAL/HTS_Codes.csv",                    # Subfolder
+        os.path.join(os.path.dirname(__file__), "HTS_Codes.csv") # Absolute
+    ]
     
-    except FileNotFoundError:
-        st.error(f"⚠️ **ERROR:** Python looked for the file here, but couldn't find it:\n`{file_path}`")
-        return {}
-    except Exception as e:
-        st.error(f"⚠️ **ERROR:** Something went wrong reading the HTS file. Make sure the columns are named 'SKU' and 'HTS'. Details: {e}")
+    file_path = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            file_path = path
+            break
+
+    if file_path:
+        try:
+            df = pd.read_csv(file_path, dtype=str)
+            df.columns = df.columns.str.strip()
+            # Clean SKU and HTS columns
+            df['SKU'] = df['SKU'].apply(clean_sku)
+            df['HTS'] = df['HTS'].fillna('').apply(clean_sku)
+            return df[df['SKU'] != ""].set_index('SKU')['HTS'].to_dict()
+        except Exception as e:
+            st.error(f"Found the file at {file_path}, but couldn't read it: {e}")
+            return {}
+    else:
         return {}
 
 # ==========================================
@@ -186,81 +186,3 @@ if page == "Quote Request Generator":
                 st.download_button("📥 Download Excel Quote", data=excel_buf.getvalue(), file_name=f"Quote_{pallets_final}PLTS.xlsx")
                 st.download_button("📥 Download PDF Quote", data=pdf_bytes, file_name=f"Quote_{pallets_final}PLTS.pdf", mime="application/pdf")
             with col2:
-                st.subheader("2. Email Draft")
-                dim_string = "".join([f"\n- **Dimensions**: {d}" for d in formatted_dims])
-                st.code(f"Hi Team,\n\nPlease find details for a new quote:\n- **Dest**: {destination}\n- **Service**: {service}\n- **Units**: {units_final:,}\n- **Pallets**: {pallets_final}{dim_string}\n- **Weight**: {lbs_final:,.2f} LBS\n\nThanks!", language="markdown")
-
-
-# --- TOOL 2: INVOICE LINE ITEM EXTRACTOR ---
-elif page == "Invoice Line Item Extractor":
-    st.title("🧾 Invoice Line Item Extractor")
-    st.markdown("Upload your **Export** file to instantly generate a ready-to-copy line item table for your Excel template. It will automatically match HTS codes and calculate unit pricing.")
-    
-    sap_file = st.file_uploader("Upload SAP Export (Export.xlsx or Export.csv)", type=['csv', 'xlsx'])
-
-    if sap_file:
-        # Read the file
-        if sap_file.name.endswith('.csv'):
-            raw_df = pd.read_csv(sap_file)
-        else:
-            raw_df = pd.read_excel(sap_file)
-
-        # Clean column headers so spaces don't break the code
-        raw_df.columns = [str(col).strip() for col in raw_df.columns]
-        
-        invoice_rows = []
-        for _, row in raw_df.iterrows():
-            # Clean the SKU from the export file the exact same way
-            sku = clean_sku(row.get('Material', ''))
-            
-            # Skip rows that don't have a valid SKU
-            if not sku:
-                continue
-                
-            description = str(row.get('Short Text', '')).strip()
-            qty = clean_numeric(row.get('Order Quantity', 0))
-            raw_net = clean_numeric(row.get('Net Price', 0))
-            
-            # The exact math rule: Net Price / 1000
-            u_price = raw_net / 1000
-            total_val = qty * u_price
-            
-            # Map HTS Code securely
-            hts_code = hts_map.get(sku, "")
-            
-            # Append to our new clean list (Pallet column successfully removed)
-            invoice_rows.append({
-                "SKU": sku,
-                "HTS Code": hts_code,
-                "Origin": "",
-                "Description": description,
-                "Quantity": int(qty),
-                "Unit Price": f"${u_price:,.3f}",  
-                "Total": f"${total_val:,.2f}"
-            })
-        
-        # Build the final DataFrame
-        if invoice_rows:
-            df_final = pd.DataFrame(invoice_rows)
-
-            # Display the results
-            st.success(f"✅ Successfully extracted {len(df_final)} line items!")
-            st.info("💡 **How to use:** You can either copy the table below directly, or download it as an Excel file.")
-            
-            # Display the dataframe cleanly without the row numbers (index)
-            st.dataframe(df_final, use_container_width=True, hide_index=True)
-            
-            # Create a downloadable Excel buffer
-            excel_buffer = io.BytesIO()
-            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                df_final.to_excel(writer, index=False, sheet_name="Extracted_Items")
-            
-            st.download_button(
-                label="📥 Download as Excel File",
-                data=excel_buffer.getvalue(),
-                file_name="Extracted_Line_Items.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            
-        else:
-            st.warning("No valid SKUs found in the uploaded file. Please check the file formatting.")
