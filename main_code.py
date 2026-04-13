@@ -1,135 +1,95 @@
-import streamlit as st
-import pandas as pd
-import io
-import datetime
-from fpdf import FPDF
-from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, Border, Side
+def create_stylized_excel(df, po_ref, dest_info):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "INVOICE"
+    
+    # Clean up the view (hides gridlines like a real form)
+    ws.sheet_view.showGridLines = False
 
-# --- HELPER: CLEAN NUMERIC STRINGS ---
-def clean_numeric(value):
-    if pd.isna(value) or value == "":
-        return 0.0
-    if isinstance(value, (int, float)):
-        return float(value)
-    # Remove commas, dollar signs, and spaces
-    clean_val = str(value).replace(',', '').replace('$', '').strip()
-    try:
-        return float(clean_val)
-    except ValueError:
-        return 0.0
+    # Set exact column widths to match your image
+    ws.column_dimensions['D'].width = 15
+    ws.column_dimensions['E'].width = 18
+    ws.column_dimensions['F'].width = 10
+    ws.column_dimensions['G'].width = 50
+    ws.column_dimensions['H'].width = 12
+    ws.column_dimensions['I'].width = 15
+    ws.column_dimensions['J'].width = 15
 
-# --- PDF GENERATOR ---
-class ProFormaPDF(FPDF):
-    def create_invoice(self, df, dest_info, po_ref):
-        self.add_page()
-        self.set_margin(10)
+    bold_font = Font(bold=True)
+    
+    # 1. Header (Row 25)
+    ws['D25'] = "PRO-FORMA INVOICE"
+    ws['D25'].font = Font(bold=True, size=14)
+
+    # 2. Document Info (Right side, Rows 27-31)
+    date_str = datetime.date.today().strftime('%B %d /%Y')
+    ws['H27'] = "Doc No.:"
+    ws['I27'] = po_ref
+    ws['H28'] = "Doc. Date:"
+    ws['I28'] = date_str
+    ws['H29'] = "Due Date:"
+    ws['I29'] = date_str
+    ws['H30'] = "Ref. No.:"
+    ws['I30'] = po_ref
+    ws['H31'] = "Page No.:"
+    ws['I31'] = "Page 1 of 1"
+
+    # Calculate Grand Total for the "TOTAL DUE" box
+    grand_total = df['Total'].sum()
+
+    # 3. Addresses & Totals (Rows 33-37)
+    ws['D33'] = "BILL TO"
+    ws['G33'] = "SHIP TO"
+    ws['I33'] = "TOTAL DUE"
+    for cell in ['D33', 'G33', 'I33']: ws[cell].font = bold_font
+
+    ws['D34'] = "MONAT GLOBAL CANADA UCL"
+    ws['G34'] = "MONAT GLOBAL CANADA"
+    ws['D35'] = "135 SPARKS AVE"
+    ws['G35'] = "135 SPARKS AVENUE"
+    ws['I35'] = grand_total
+    ws['I35'].number_format = '"$"#,##0.00'
+    ws['D36'] = "TORONTO ON M2H2S5"
+    ws['G36'] = "North York, ON M2H 2S5"
+    ws['D37'] = "CANADA"
+    ws['G37'] = "CANADA"
+
+    # 4. Incoterms / Origin (Rows 37-40)
+    ws['I37'] = "COUNTRY OF ORIGEN:"
+    ws['I38'] = "U.S.A"
+    ws['I39'] = "INCOTERMS"
+    ws['I40'] = "CIF"
+
+    # 5. Table Headers (Row 42)
+    headers = ["SKU", "HTS Code", "Origin", "Description", "Quantity", "Unit Price", "Total"]
+    for col_num, header in enumerate(headers, start=4): # Col 4 is 'D'
+        cell = ws.cell(row=42, column=col_num, value=header)
+        cell.font = bold_font
+        cell.alignment = Alignment(horizontal='center')
+
+    # 6. Table Data (Row 43 onwards)
+    current_row = 43
+    for _, row in df.iterrows():
+        ws.cell(row=current_row, column=4, value=str(row['SKU']))
+        ws.cell(row=current_row, column=5, value=str(row['HTS'])).alignment = Alignment(horizontal='center')
+        ws.cell(row=current_row, column=6, value="USA").alignment = Alignment(horizontal='center')
+        ws.cell(row=current_row, column=7, value=str(row['Description']))
+        ws.cell(row=current_row, column=8, value=row['Qty']).alignment = Alignment(horizontal='center')
         
-        self.set_font('Arial', 'B', 14)
-        self.cell(0, 8, 'PRO-FORMA INVOICE', ln=1, align='C')
-        self.set_font('Arial', 'I', 8)
-        self.cell(0, 5, 'Only for Customs Purposes', ln=1, align='C')
-        
-        self.set_font('Arial', '', 9)
-        curr_y = self.get_y()
-        self.multi_cell(90, 4, "SHIPPER:\nMonat Global\n10000 NW 15 Terrace\nDoral, FL 33172, USA")
-        
-        self.set_xy(130, curr_y)
-        date_str = datetime.date.today().strftime('%B %d / %Y')
-        self.multi_cell(60, 4, f"Doc No.: {po_ref}\nDoc. Date: {date_str}\nRef. No.: {po_ref}\nPage: 1 of 1")
-        self.ln(5)
+        # Format pricing
+        ws.cell(row=current_row, column=9, value=row['Unit Price']).number_format = '"$"#,##0.000'
+        ws.cell(row=current_row, column=10, value=row['Total']).number_format = '"$"#,##0.00'
+        current_row += 1
 
-        # Bill To / Ship To Boxes
-        self.set_fill_color(235, 235, 235)
-        self.set_font('Arial', 'B', 8)
-        self.cell(95, 6, ' BILL TO', border=1, fill=True)
-        self.cell(95, 6, ' SHIP TO', border=1, fill=True, ln=1)
-        
-        self.set_font('Arial', '', 8)
-        box_y = self.get_y()
-        self.multi_cell(95, 5, dest_info, border=1)
-        bottom_y = self.get_y()
-        self.set_xy(105, box_y)
-        self.multi_cell(95, 5, dest_info, border=1)
-        self.set_y(max(bottom_y, self.get_y()) + 2)
+    # 7. Bottom Sub-Total & Legal Text
+    current_row += 2
+    ws.cell(row=current_row, column=8, value="SUB-TOTAL").font = bold_font
+    ws.cell(row=current_row, column=10, value=grand_total).number_format = '"$"#,##0.00'
+    
+    current_row += 2
+    disclaimer = "THIS DELIVERY BECOMES A CONTRACT AND IS FIRM AND NON-CANCELABLE. PURCHASER AGREES TO PAY ANY AND ALL COURT COST..."
+    ws.cell(row=current_row, column=4, value=disclaimer).font = Font(italic=True, size=8)
 
-        # Table Header
-        cols = ["SKU", "HTS Code", "Origin", "Description", "Qty", "Unit Price", "Total"]
-        widths = [20, 25, 15, 65, 15, 25, 25]
-        for i, col in enumerate(cols):
-            self.cell(widths[i], 8, col, border=1, fill=True, align='C')
-        self.ln()
-
-        # Table Data
-        self.set_font('Arial', '', 7)
-        grand_total = 0
-        for _, row in df.iterrows():
-            qty = clean_numeric(row['Qty'])
-            u_p = clean_numeric(row['Unit Price'])
-            line_total = qty * u_p
-            grand_total += line_total
-            
-            self.cell(widths[0], 7, str(row['SKU']), border=1)
-            self.cell(widths[1], 7, str(row['HTS']), border=1, align='C')
-            self.cell(widths[2], 7, "USA", border=1, align='C')
-            self.cell(widths[3], 7, str(row['Description'])[:45], border=1)
-            self.cell(widths[4], 7, f"{qty:,.0f}", border=1, align='C')
-            self.cell(widths[5], 7, f"${u_p:.3f}", border=1, align='R')
-            self.cell(widths[6], 7, f"${line_total:,.2f}", border=1, align='R', ln=1)
-
-        # Sub-Total
-        self.set_font('Arial', 'B', 8)
-        self.cell(sum(widths[:-1]), 10, "SUB-TOTAL (USD)", border=1, align='R')
-        self.cell(widths[-1], 10, f"${grand_total:,.2f}", border=1, align='R', ln=1)
-
-# --- APP INTERFACE ---
-st.set_page_config(page_title="Logistics Portal", layout="wide")
-
-@st.cache_data
-def get_hts_map():
-    try:
-        df = pd.read_csv("HTS Codes.xlsx - Sheet1.csv")
-        return df.set_index('Material')['Ext. Material Grp'].to_dict()
-    except: return {}
-
-hts_map = get_hts_map()
-
-st.sidebar.title("Navigation")
-page = st.sidebar.selectbox("Select Tool", ["Commercial Invoice Generator", "Quote Generator"])
-
-if page == "Commercial Invoice Generator":
-    st.header("🧾 Pro-Forma Invoice Tool")
-    dest_info = st.text_area("Consignee Address", "MONAT GLOBAL CANADA\n135 SPARKS AVENUE\nNorth York, ON M2H 2S5")
-    sap_file = st.file_uploader("Upload SAP Export", type=['csv', 'xlsx'])
-
-    if sap_file:
-        df = pd.read_csv(sap_file) if sap_file.name.endswith('.csv') else pd.read_excel(sap_file)
-        df.columns = [str(c).strip() for c in df.columns]
-        
-        invoice_rows = []
-        for _, row in df.iterrows():
-            sku = str(row.get('Material', ''))
-            raw_net = row.get('Net Price', 0)
-            qty = clean_numeric(row.get('Order Quantity', 0))
-            
-            # Application of the "Net Price / 1000" rule
-            u_price = clean_numeric(raw_net) / 1000
-            
-            invoice_rows.append({
-                "SKU": sku,
-                "HTS": hts_map.get(sku, ""),
-                "Description": row.get('Short Text', ''),
-                "Qty": qty,
-                "Unit Price": u_price,
-                "Total": qty * u_price
-            })
-        
-        final_df = st.data_editor(pd.DataFrame(invoice_rows))
-
-        if st.button("🚀 Generate Final Documents"):
-            po_ref = str(df.iloc[0].get('Purchasing Document', 'Invoice'))
-            pdf = ProFormaPDF()
-            pdf.create_invoice(final_df, dest_info, po_ref)
-            pdf_bytes = pdf.output(dest='S').encode('latin-1')
-            
-            st.download_button("📥 Download PDF Pro-Forma", pdf_bytes, f"Invoice_{po_ref}.pdf")
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
