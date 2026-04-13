@@ -20,18 +20,31 @@ def clean_numeric(value):
     except ValueError:
         return 0.0
 
+def clean_sku(val):
+    """Aggressively cleans SKUs to ensure perfect matching between files."""
+    if pd.isna(val): 
+        return ""
+    s = str(val).strip()
+    if s.endswith('.0'): 
+        s = s[:-2] # Strip trailing decimals
+    if s.lower() == 'nan': 
+        return ""
+    return s
+
 @st.cache_data
 def get_hts_map():
-    """Loads the HTS codes from the database file and forces text formatting."""
+    """Loads the HTS codes and aggressively formats the keys for matching."""
     try:
         df = pd.read_csv("HTS Codes.xlsx - Sheet1.csv")
-        # Force the Material column to be a pure string (removes .0 decimals)
-        df['Material'] = df['Material'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+        # Ensure there are no hidden spaces in the column headers
+        df.columns = df.columns.str.strip()
         
-        # Force the HTS codes to be clean strings as well
-        df['Ext. Material Grp'] = df['Ext. Material Grp'].fillna('').astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+        # Apply the exact same cleaning function to the HTS database
+        df['Material'] = df['Material'].apply(clean_sku)
+        df['Ext. Material Grp'] = df['Ext. Material Grp'].fillna('').apply(clean_sku)
         
-        return df.set_index('Material')['Ext. Material Grp'].to_dict()
+        # Create the dictionary only for valid rows
+        return df[df['Material'] != ""].set_index('Material')['Ext. Material Grp'].to_dict()
     except Exception as e:
         return {}
 
@@ -178,17 +191,16 @@ elif page == "Invoice Line Item Extractor":
         else:
             raw_df = pd.read_excel(sap_file)
 
-        # Clean column headers
+        # Clean column headers so spaces don't break the code
         raw_df.columns = [str(col).strip() for col in raw_df.columns]
         
         invoice_rows = []
         for _, row in raw_df.iterrows():
-            raw_sku = str(row.get('Material', '')).strip()
-            # Remove any trailing '.0' that pandas might have added
-            sku = raw_sku.replace('.0', '')
+            # Clean the SKU from the export file the exact same way
+            sku = clean_sku(row.get('Material', ''))
             
             # Skip rows that don't have a valid SKU
-            if not sku or sku.lower() == 'nan':
+            if not sku:
                 continue
                 
             description = str(row.get('Short Text', '')).strip()
@@ -199,27 +211,42 @@ elif page == "Invoice Line Item Extractor":
             u_price = raw_net / 1000
             total_val = qty * u_price
             
-            # Map HTS Code securely
+            # Map HTS Code securely (it will now match cleanly)
             hts_code = hts_map.get(sku, "")
             
-            # Append to our new clean list
+            # Append to our new clean list (Pallet column removed)
             invoice_rows.append({
                 "SKU": sku,
                 "HTS Code": hts_code,
                 "Origin": "",
                 "Description": description,
                 "Quantity": int(qty),
-                "Unit Price": f"${u_price:,.3f}",  # 3 decimal places for precision
-                "Total": f"${total_val:,.2f}",
-                "Pallet": ""
+                "Unit Price": f"${u_price:,.3f}",  
+                "Total": f"${total_val:,.2f}"
             })
         
         # Build the final DataFrame
-        df_final = pd.DataFrame(invoice_rows)
+        if invoice_rows:
+            df_final = pd.DataFrame(invoice_rows)
 
-        # Display the results
-        st.success(f"✅ Successfully extracted {len(df_final)} line items!")
-        st.info("💡 **How to use:** Click inside the table, press **CTRL+A** (or CMD+A) to select all, then copy and paste directly into your Excel invoice template.")
-        
-        # Display the dataframe cleanly without the row numbers (index)
-        st.dataframe(df_final, use_container_width=True, hide_index=True)
+            # Display the results
+            st.success(f"✅ Successfully extracted {len(df_final)} line items!")
+            st.info("💡 **How to use:** You can either copy the table below directly, or download it as an Excel file.")
+            
+            # Display the dataframe cleanly without the row numbers (index)
+            st.dataframe(df_final, use_container_width=True, hide_index=True)
+            
+            # Create a downloadable Excel buffer
+            excel_buffer = io.BytesIO()
+            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                df_final.to_excel(writer, index=False, sheet_name="Extracted_Items")
+            
+            st.download_button(
+                label="📥 Download as Excel File",
+                data=excel_buffer.getvalue(),
+                file_name="Extracted_Line_Items.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            
+        else:
+            st.warning("No valid SKUs found in the uploaded file. Please check the file formatting.")
