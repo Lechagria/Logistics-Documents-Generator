@@ -2,11 +2,10 @@ import streamlit as st
 import pandas as pd
 from collections import Counter
 import io
-import re
 import datetime
 from fpdf import FPDF
 from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, Border, Side
+from openpyxl.styles import Font, Alignment
 
 # ==========================================
 # 1. HELPER FUNCTIONS
@@ -17,7 +16,6 @@ def clean_numeric(value):
         return 0.0
     if isinstance(value, (int, float)):
         return float(value)
-    # Remove commas, dollar signs, and spaces
     clean_val = str(value).replace(',', '').replace('$', '').strip()
     try:
         return float(clean_val)
@@ -69,7 +67,6 @@ class ProFormaPDF(FPDF):
         self.add_page()
         self.set_margin(10)
         
-        # Header Section
         self.set_font('Arial', 'B', 14)
         self.cell(0, 8, 'PRO-FORMA INVOICE', ln=1, align='C')
         self.set_font('Arial', 'I', 8)
@@ -84,7 +81,6 @@ class ProFormaPDF(FPDF):
         self.multi_cell(60, 4, f"Doc No.: {po_ref}\nDoc. Date: {date_str}\nDue Date: {date_str}\nRef. No.: {po_ref}\nPage No.: Page 1 of 1")
         self.ln(5)
 
-        # Bill To / Ship To Boxes
         self.set_fill_color(235, 235, 235)
         self.set_font('Arial', 'B', 8)
         self.cell(95, 6, ' BILL TO', border=1, fill=True)
@@ -98,40 +94,39 @@ class ProFormaPDF(FPDF):
         self.multi_cell(95, 5, dest_info, border=1)
         self.set_y(max(bottom_y, self.get_y()) + 2)
 
-        # Summary Info
         self.set_font('Arial', 'B', 8)
         self.cell(140, 5, "COUNTRY OF ORIGIN:  U.S.A", align='R')
         self.ln()
         self.cell(140, 5, "INCOTERMS:  CIF", align='R')
         self.ln(5)
 
-        # Table Header
         cols = ["SKU", "HTS Code", "Origin", "Description", "Quantity", "Unit Price", "Total"]
         widths = [20, 25, 15, 65, 15, 25, 25]
         for i, col in enumerate(cols):
             self.cell(widths[i], 8, col, border=1, fill=True, align='C')
         self.ln()
 
-        # Table Data
         self.set_font('Arial', '', 7)
         grand_total = 0
         for _, row in df.iterrows():
-            total_val = float(row['Total'])
+            total_val = float(row.get('Total', 0.0))
             grand_total += total_val
-            self.cell(widths[0], 7, str(row['SKU']), border=1)
-            self.cell(widths[1], 7, str(row['HTS']), border=1, align='C')
+            
+            qty = clean_numeric(row.get('Qty', 0))
+            u_price = clean_numeric(row.get('Unit Price', 0))
+            
+            self.cell(widths[0], 7, str(row.get('SKU', '')), border=1)
+            self.cell(widths[1], 7, str(row.get('HTS', '')), border=1, align='C')
             self.cell(widths[2], 7, "USA", border=1, align='C')
-            self.cell(widths[3], 7, str(row['Description'])[:45], border=1)
-            self.cell(widths[4], 7, f"{row['Qty']:,.0f}", border=1, align='C')
-            self.cell(widths[5], 7, f"${row['Unit Price']:.3f}", border=1, align='R')
+            self.cell(widths[3], 7, str(row.get('Description', ''))[:45], border=1)
+            self.cell(widths[4], 7, f"{qty:,.0f}", border=1, align='C')
+            self.cell(widths[5], 7, f"${u_price:.3f}", border=1, align='R')
             self.cell(widths[6], 7, f"${total_val:,.2f}", border=1, align='R', ln=1)
 
-        # Total
         self.set_font('Arial', 'B', 8)
         self.cell(sum(widths[:-1]), 10, "SUB-TOTAL (USD)", border=1, align='R')
         self.cell(widths[-1], 10, f"${grand_total:,.2f}", border=1, align='R', ln=1)
 
-        # Footer Legal Disclaimer
         self.ln(5)
         self.set_font('Arial', 'I', 6)
         disclaimer = ("THIS DELIVERY BECOMES A CONTRACT AND IS FIRM AND NON-CANCELABLE. PURCHASER AGREES TO PAY ANY AND ALL COURT COST. "
@@ -140,13 +135,12 @@ class ProFormaPDF(FPDF):
         self.multi_cell(0, 3, disclaimer)
 
 # ==========================================
-# 3. EXCEL GENERATOR (STYLIZED PRO-FORMA)
+# 3. EXCEL GENERATOR
 # ==========================================
 def create_stylized_excel(df, po_ref, dest_info):
     wb = Workbook()
     ws = wb.active
     ws.title = "INVOICE"
-    
     ws.sheet_view.showGridLines = False
 
     ws.column_dimensions['D'].width = 15
@@ -159,67 +153,53 @@ def create_stylized_excel(df, po_ref, dest_info):
 
     bold_font = Font(bold=True)
     
-    # Header
     ws['D25'] = "PRO-FORMA INVOICE"
     ws['D25'].font = Font(bold=True, size=14)
 
-    # Document Info
     date_str = datetime.date.today().strftime('%B %d /%Y')
-    ws['H27'] = "Doc No.:"
-    ws['I27'] = po_ref
-    ws['H28'] = "Doc. Date:"
-    ws['I28'] = date_str
-    ws['H29'] = "Due Date:"
-    ws['I29'] = date_str
-    ws['H30'] = "Ref. No.:"
-    ws['I30'] = po_ref
-    ws['H31'] = "Page No.:"
-    ws['I31'] = "Page 1 of 1"
+    ws['H27'], ws['I27'] = "Doc No.:", po_ref
+    ws['H28'], ws['I28'] = "Doc. Date:", date_str
+    ws['H29'], ws['I29'] = "Due Date:", date_str
+    ws['H30'], ws['I30'] = "Ref. No.:", po_ref
+    ws['H31'], ws['I31'] = "Page No.:", "Page 1 of 1"
 
-    grand_total = df['Total'].sum()
+    # Safely get grand total even if DataFrame is completely empty
+    grand_total = df['Total'].sum() if 'Total' in df.columns else 0.0
 
-    # Addresses & Totals
-    ws['D33'] = "BILL TO"
-    ws['G33'] = "SHIP TO"
-    ws['I33'] = "TOTAL DUE"
+    ws['D33'], ws['G33'], ws['I33'] = "BILL TO", "SHIP TO", "TOTAL DUE"
     for cell in ['D33', 'G33', 'I33']: ws[cell].font = bold_font
 
-    ws['D34'] = "MONAT GLOBAL CANADA UCL"
-    ws['G34'] = "MONAT GLOBAL CANADA"
-    ws['D35'] = "135 SPARKS AVE"
-    ws['G35'] = "135 SPARKS AVENUE"
+    ws['D34'], ws['G34'] = "MONAT GLOBAL CANADA UCL", "MONAT GLOBAL CANADA"
+    ws['D35'], ws['G35'] = "135 SPARKS AVE", "135 SPARKS AVENUE"
     ws['I35'] = grand_total
     ws['I35'].number_format = '"$"#,##0.00'
-    ws['D36'] = "TORONTO ON M2H2S5"
-    ws['G36'] = "North York, ON M2H 2S5"
-    ws['D37'] = "CANADA"
-    ws['G37'] = "CANADA"
+    ws['D36'], ws['G36'] = "TORONTO ON M2H2S5", "North York, ON M2H 2S5"
+    ws['D37'], ws['G37'] = "CANADA", "CANADA"
 
-    ws['I37'] = "COUNTRY OF ORIGEN:"
-    ws['I38'] = "U.S.A"
-    ws['I39'] = "INCOTERMS"
-    ws['I40'] = "CIF"
+    ws['I37'], ws['I38'] = "COUNTRY OF ORIGEN:", "U.S.A"
+    ws['I39'], ws['I40'] = "INCOTERMS", "CIF"
 
-    # Table Headers
     headers = ["SKU", "HTS Code", "Origin", "Description", "Quantity", "Unit Price", "Total"]
     for col_num, header in enumerate(headers, start=4): 
         cell = ws.cell(row=42, column=col_num, value=header)
         cell.font = bold_font
         cell.alignment = Alignment(horizontal='center')
 
-    # Table Data
     current_row = 43
     for _, row in df.iterrows():
-        ws.cell(row=current_row, column=4, value=str(row['SKU']))
-        ws.cell(row=current_row, column=5, value=str(row['HTS'])).alignment = Alignment(horizontal='center')
+        qty = clean_numeric(row.get('Qty', 0))
+        u_price = clean_numeric(row.get('Unit Price', 0))
+        total_val = clean_numeric(row.get('Total', 0))
+
+        ws.cell(row=current_row, column=4, value=str(row.get('SKU', '')))
+        ws.cell(row=current_row, column=5, value=str(row.get('HTS', ''))).alignment = Alignment(horizontal='center')
         ws.cell(row=current_row, column=6, value="USA").alignment = Alignment(horizontal='center')
-        ws.cell(row=current_row, column=7, value=str(row['Description']))
-        ws.cell(row=current_row, column=8, value=row['Qty']).alignment = Alignment(horizontal='center')
-        ws.cell(row=current_row, column=9, value=row['Unit Price']).number_format = '"$"#,##0.000'
-        ws.cell(row=current_row, column=10, value=row['Total']).number_format = '"$"#,##0.00'
+        ws.cell(row=current_row, column=7, value=str(row.get('Description', '')))
+        ws.cell(row=current_row, column=8, value=qty).alignment = Alignment(horizontal='center')
+        ws.cell(row=current_row, column=9, value=u_price).number_format = '"$"#,##0.000'
+        ws.cell(row=current_row, column=10, value=total_val).number_format = '"$"#,##0.00'
         current_row += 1
 
-    # Bottom Sub-Total
     current_row += 2
     ws.cell(row=current_row, column=8, value="SUB-TOTAL").font = bold_font
     ws.cell(row=current_row, column=10, value=grand_total).number_format = '"$"#,##0.00'
@@ -296,7 +276,6 @@ if page == "Quote Request Generator":
         st.success(f"✅ Data Extracted: **{pallets_final}** Pallets | **{units_final:,}** Units")
 
         if st.button("🚀 Generate Quote Package"):
-            # Excel
             quote_data = [["QUOTE REQUEST", ""], ["DESTINATION", destination], ["SERVICE", service], ["UNITS", f"{units_final:,}"], ["PALLETS", pallets_final]]
             if formatted_dims:
                 quote_data.append(["DIMENSIONS", formatted_dims[0]])
@@ -308,7 +287,6 @@ if page == "Quote Request Generator":
             with pd.ExcelWriter(excel_buf, engine='openpyxl') as writer:
                 df_output.to_excel(writer, index=False, header=False)
 
-            # PDF
             shipment_info = {
                 "DESTINATION": destination, "SERVICE": service, "TOTAL UNITS": f"{units_final:,}", 
                 "TOTAL PALLETS": pallets_final, "TOTAL WEIGHT": f"{lbs_final:,.2f} LBS | {kgs_final:,.2f} KGS",
@@ -319,10 +297,6 @@ if page == "Quote Request Generator":
             pdf.create_table(shipment_info, formatted_dims)
             pdf_bytes = pdf.output(dest='S').encode('latin-1')
 
-            # Email Draft
-            dim_string = "".join([f"\n- **Dimensions**: {d}" for d in formatted_dims])
-            email_body = f"Hi Team,\n\nHope you are having a great week! \n\nPlease find the details below for a new {service} shipment quote:\n\n- **Destination**: {destination}\n- **Service**: {service}\n- **Total Units**: {units_final:,}\n- **Pallets**: {pallets_final}{dim_string}\n- **Total Weight**: {lbs_final:,.2f} LBS | {kgs_final:,.2f} KGS\n- **Commodity**: {commodity}\n- **Value**: {cargo_value}\n- **Incoterms**: {incoterms}\n\nPlease let us know the best rates and estimated transit times for this.\n\nAttached are the Quote Request and Packing List.\n\nThanks!"
-
             st.divider()
             col1, col2 = st.columns(2)
             with col1:
@@ -331,7 +305,8 @@ if page == "Quote Request Generator":
                 st.download_button("📥 Download PDF Quote", data=pdf_bytes, file_name=f"Quote_{pallets_final}PLTS.pdf", mime="application/pdf")
             with col2:
                 st.subheader("2. Email Draft")
-                st.code(email_body, language="markdown")
+                dim_string = "".join([f"\n- **Dimensions**: {d}" for d in formatted_dims])
+                st.code(f"Hi Team,\n\nPlease find details for a new quote:\n- **Dest**: {destination}\n- **Service**: {service}\n- **Units**: {units_final:,}\n- **Pallets**: {pallets_final}{dim_string}\n- **Weight**: {lbs_final:,.2f} LBS\n\nThanks!", language="markdown")
 
 # --- COMMERCIAL INVOICE GENERATOR ---
 elif page == "Commercial Invoice Generator":
@@ -348,7 +323,6 @@ elif page == "Commercial Invoice Generator":
         else:
             raw_df = pd.read_excel(sap_file)
 
-        # Fuzzy matching: strip spaces from columns
         raw_df.columns = [str(col).strip() for col in raw_df.columns]
         
         invoice_rows = []
@@ -358,34 +332,38 @@ elif page == "Commercial Invoice Generator":
             qty = clean_numeric(row.get('Order Quantity', 0))
             description = row.get('Short Text', '')
             
-            # The Critical Fix: clean_numeric is used here instead of float
             u_price = clean_numeric(raw_net) / 1000
             total_val = qty * u_price
-            
             hts_code = hts_map.get(row.get('Material'), "")
             
-            invoice_rows.append({
-                "SKU": sku,
-                "HTS": hts_code,
-                "Description": description,
-                "Qty": qty,
-                "Unit Price": u_price,
-                "Total": total_val
-            })
+            # We skip appending rows if it looks like an empty/junk row from a bad upload
+            if sku or description or qty > 0:
+                invoice_rows.append({
+                    "SKU": sku,
+                    "HTS": hts_code,
+                    "Description": description,
+                    "Qty": qty,
+                    "Unit Price": u_price,
+                    "Total": total_val
+                })
         
+        # THE FIX: We explicitly define the columns so they are ALWAYS there, 
+        # even if the uploaded file was completely blank or invalid.
+        expected_cols = ["SKU", "HTS", "Description", "Qty", "Unit Price", "Total"]
+        df_preview = pd.DataFrame(invoice_rows, columns=expected_cols)
+
         st.subheader("Data Preview")
         st.caption("Edit HTS codes or Prices directly in the table below if needed.")
-        df_final = st.data_editor(pd.DataFrame(invoice_rows), num_rows="dynamic")
+        df_final = st.data_editor(df_preview, num_rows="dynamic")
 
         if st.button("🚀 Generate Final Documents"):
-            po_ref = str(raw_df.iloc[0].get('Purchasing Document', 'UNKNOWN'))
+            # Safely grab the PO Reference (defaults to 'UNKNOWN' if missing)
+            po_ref = str(raw_df.iloc[0].get('Purchasing Document', 'UNKNOWN')) if not raw_df.empty else 'UNKNOWN'
             
-            # PDF Generation
             pdf = ProFormaPDF()
             pdf.create_invoice(df_final, dest_info, po_ref)
             pdf_output = pdf.output(dest='S').encode('latin-1')
             
-            # Excel Generation
             xl_output = create_stylized_excel(df_final, po_ref, dest_info)
             
             st.divider()
@@ -393,5 +371,4 @@ elif page == "Commercial Invoice Generator":
             with c1:
                 st.download_button("📥 Download PDF Invoice", pdf_output, f"Invoice_{po_ref}.pdf", "application/pdf")
             with c2:
-                st.download_button("📥 Download Excel Invoice", xl_output, f"Invoice_{po_ref}.xlsx")
                 st.download_button("📥 Download Excel Invoice", xl_output, f"Invoice_{po_ref}.xlsx")
