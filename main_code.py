@@ -12,6 +12,7 @@ from openpyxl.styles import Font, Alignment, Border, Side
 # 1. HELPER FUNCTIONS
 # ==========================================
 def clean_numeric(value):
+    """Safely converts strings with commas or dollar signs to floats."""
     if pd.isna(value) or value == "":
         return 0.0
     if isinstance(value, (int, float)):
@@ -357,7 +358,7 @@ elif page == "Commercial Invoice Generator":
             qty = clean_numeric(row.get('Order Quantity', 0))
             description = row.get('Short Text', '')
             
-            # Math: Net Price / 1000
+            # The Critical Fix: clean_numeric is used here instead of float
             u_price = clean_numeric(raw_net) / 1000
             total_val = qty * u_price
             
@@ -392,4 +393,5 @@ elif page == "Commercial Invoice Generator":
             with c1:
                 st.download_button("📥 Download PDF Invoice", pdf_output, f"Invoice_{po_ref}.pdf", "application/pdf")
             with c2:
+                st.download_button("📥 Download Excel Invoice", xl_output, f"Invoice_{po_ref}.xlsx")
                 st.download_button("📥 Download Excel Invoice", xl_output, f"Invoice_{po_ref}.xlsx")
