@@ -35,7 +35,7 @@ def get_hts_map():
     """Loads HTS codes fresh without caching to prevent stale blank data."""
     try:
         # Force all columns to be read as plain text instantly
-        df = pd.read_csv("HTS Codes.xlsx - Sheet1.csv", dtype=str)
+        df = pd.read_csv("HTS_Codes.xlsx - Sheet1.csv", dtype=str)
         
         # Ensure there are no hidden spaces in the column headers
         df.columns = df.columns.str.strip()
