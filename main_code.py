@@ -22,11 +22,15 @@ def clean_numeric(value):
 
 @st.cache_data
 def get_hts_map():
-    """Loads the HTS codes from the database file."""
+    """Loads the HTS codes from the database file and forces text formatting."""
     try:
         df = pd.read_csv("HTS Codes.xlsx - Sheet1.csv")
-        # Ensure 'Material' is read as a string so it matches SAP exactly
-        df['Material'] = df['Material'].astype(str).str.strip()
+        # Force the Material column to be a pure string (removes .0 decimals)
+        df['Material'] = df['Material'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+        
+        # Force the HTS codes to be clean strings as well
+        df['Ext. Material Grp'] = df['Ext. Material Grp'].fillna('').astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+        
         return df.set_index('Material')['Ext. Material Grp'].to_dict()
     except Exception as e:
         return {}
@@ -168,7 +172,7 @@ elif page == "Invoice Line Item Extractor":
     sap_file = st.file_uploader("Upload SAP Export (Export.xlsx or Export.csv)", type=['csv', 'xlsx'])
 
     if sap_file:
-        # 1. Read the file
+        # Read the file
         if sap_file.name.endswith('.csv'):
             raw_df = pd.read_csv(sap_file)
         else:
@@ -179,7 +183,9 @@ elif page == "Invoice Line Item Extractor":
         
         invoice_rows = []
         for _, row in raw_df.iterrows():
-            sku = str(row.get('Material', '')).strip()
+            raw_sku = str(row.get('Material', '')).strip()
+            # Remove any trailing '.0' that pandas might have added
+            sku = raw_sku.replace('.0', '')
             
             # Skip rows that don't have a valid SKU
             if not sku or sku.lower() == 'nan':
@@ -187,14 +193,13 @@ elif page == "Invoice Line Item Extractor":
                 
             description = str(row.get('Short Text', '')).strip()
             qty = clean_numeric(row.get('Order Quantity', 0))
+            raw_net = clean_numeric(row.get('Net Price', 0))
             
-            # Assuming 'Net Price' in your export is the Total Line Value
-            total_val = clean_numeric(row.get('Net Price', 0))
+            # The exact math rule: Net Price / 1000
+            u_price = raw_net / 1000
+            total_val = qty * u_price
             
-            # Calculate Unit Price
-            u_price = (total_val / qty) if qty > 0 else 0.0
-            
-            # Map HTS Code
+            # Map HTS Code securely
             hts_code = hts_map.get(sku, "")
             
             # Append to our new clean list
@@ -204,15 +209,15 @@ elif page == "Invoice Line Item Extractor":
                 "Origin": "",
                 "Description": description,
                 "Quantity": int(qty),
-                "Unit Price": f"${u_price:,.2f}",
+                "Unit Price": f"${u_price:,.3f}",  # 3 decimal places for precision
                 "Total": f"${total_val:,.2f}",
                 "Pallet": ""
             })
         
-        # 2. Build the final DataFrame
+        # Build the final DataFrame
         df_final = pd.DataFrame(invoice_rows)
 
-        # 3. Display the results
+        # Display the results
         st.success(f"✅ Successfully extracted {len(df_final)} line items!")
         st.info("💡 **How to use:** Click inside the table, press **CTRL+A** (or CMD+A) to select all, then copy and paste directly into your Excel invoice template.")
         
