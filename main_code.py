@@ -4,6 +4,7 @@ from collections import Counter
 import io
 import datetime
 from fpdf import FPDF
+import os
 
 # ==========================================
 # 1. HELPER FUNCTIONS
@@ -32,26 +33,32 @@ def clean_sku(val):
     return s
 
 def get_hts_map():
-    """Loads HTS codes fresh without caching to prevent stale blank data."""
+    """Loads HTS codes dynamically using your new simplified file structure."""
     try:
-        # Force all columns to be read as plain text instantly
-        df = pd.read_csv(r"HTS_Codes.xlsx - Sheet1.csv", dtype=str)
+        # 1. Find the exact folder where app.py is currently living
+        current_folder = os.path.dirname(os.path.abspath(__file__))
         
-        # Ensure there are no hidden spaces in the column headers
+        # 2. Attach the NEW file name 
+        file_path = os.path.join(current_folder, "HTS.xlsx - Sheet1.csv")
+        
+        # 3. Read the file
+        df = pd.read_csv(file_path, dtype=str)
+        
+        # Clean column headers
         df.columns = df.columns.str.strip()
         
-        # Apply the exact same cleaning function to the HTS database
-        df['Material'] = df['Material'].apply(clean_sku)
-        df['Ext. Material Grp'] = df['Ext. Material Grp'].fillna('').apply(clean_sku)
+        # Apply the exact same cleaning function to your NEW column names
+        df['SKU'] = df['SKU'].apply(clean_sku)
+        df['HTS'] = df['HTS'].fillna('').apply(clean_sku)
         
-        # Create the dictionary only for valid rows
-        return df[df['Material'] != ""].set_index('Material')['Ext. Material Grp'].to_dict()
+        # Create the dictionary using SKU as the key and HTS as the value
+        return df[df['SKU'] != ""].set_index('SKU')['HTS'].to_dict()
     
     except FileNotFoundError:
-        st.error("⚠️ **ERROR:** The file `HTS Codes.xlsx - Sheet1.csv` was not found in the same folder as this app. HTS matching will be blank.")
+        st.error(f"⚠️ **ERROR:** Python looked for the file here, but couldn't find it:\n`{file_path}`")
         return {}
     except Exception as e:
-        st.error(f"⚠️ **ERROR:** Something went wrong reading the HTS file: {e}")
+        st.error(f"⚠️ **ERROR:** Something went wrong reading the HTS file. Make sure the columns are named 'SKU' and 'HTS'. Details: {e}")
         return {}
 
 # ==========================================
