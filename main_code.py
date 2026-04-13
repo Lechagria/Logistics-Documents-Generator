@@ -6,146 +6,131 @@ import re
 from fpdf import FPDF
 import datetime
 
-# --- PDF GENERATOR CLASS FOR QUOTES ---
-class QuotePDF(FPDF):
-    def header(self):
-        self.set_font('Arial', 'B', 16)
-        self.cell(0, 15, 'QUOTE REQUEST', border=0, ln=1, align='C')
-        self.set_font('Arial', '', 10)
-        self.cell(0, 5, f'Date: {datetime.date.today().strftime("%B %d, %Y")}', ln=1, align='R')
-        self.ln(10)
-
-    def create_table(self, data_dict, dims):
-        self.set_fill_color(230, 230, 230) 
-        self.set_font('Arial', 'B', 10)
+# --- PDF GENERATOR: PRO-FORMA INVOICE STYLE ---
+class InvoicePDF(FPDF):
+    def create_invoice(self, invoice_df, dest_info, po_nums):
+        self.add_page()
         
-        # Table Header
-        self.cell(60, 10, ' CATEGORY', border=1, fill=True)
-        self.cell(130, 10, ' SHIPMENT DETAILS', border=1, ln=1, fill=True)
+        # Header Section - Matching Pro-Forma Template
+        self.set_font('Arial', 'B', 14)
+        self.cell(0, 10, 'PRO-FORMA INVOICE', border=0, ln=1, align='C')
+        self.set_font('Arial', 'I', 8)
+        self.cell(0, 5, 'Only for Customs Purposes', border=0, ln=1, align='C')
         
-        self.set_font('Arial', '', 10)
-        for key, value in data_dict.items():
-            self.set_font('Arial', 'B', 10)
-            self.cell(60, 9, f" {key}", border=1)
-            self.set_font('Arial', '', 10)
-            self.cell(130, 9, f" {value}", border=1, ln=1)
+        self.set_font('Arial', '', 9)
+        self.ln(5)
         
-        # Dimensions Section
-        for i, d in enumerate(dims):
-            label = " DIMENSIONS" if i == 0 else ""
-            self.set_font('Arial', 'B', 10)
-            self.cell(60, 9, label, border=1)
-            self.set_font('Arial', '', 10)
-            self.cell(130, 9, f" {d}", border=1, ln=1)
+        # Right-aligned Info Box
+        curr_y = self.get_y()
+        self.set_x(130)
+        self.multi_cell(60, 5, f"Doc No: {po_nums[0]}\nDoc Date: {datetime.date.today().strftime('%B %d, %Y')}\nRef No: {po_nums[0]}\nPage: Page 1 of 1", border=0)
+        
+        self.set_xy(10, curr_y)
+        self.multi_cell(80, 5, f"SHIPPER:\nMonat Global\n10000 NW 15 Terrace\nDoral, FL 33172, USA", border=0)
+        self.ln(5)
 
-# --- PORTAL CONFIG ---
-st.set_page_config(page_title="Logistics Document Portal", layout="wide")
+        # Bill To / Ship To Section
+        self.set_fill_color(240, 240, 240)
+        self.set_font('Arial', 'B', 9)
+        self.cell(95, 7, ' BILL TO', border=1, fill=True)
+        self.cell(95, 7, ' SHIP TO', border=1, ln=1, fill=True)
+        
+        self.set_font('Arial', '', 8)
+        self.cell(95, 15, f"{dest_info}", border=1)
+        self.cell(95, 15, f"{dest_info}", border=1, ln=1)
+        self.ln(5)
 
-# --- SIDEBAR NAVIGATION ---
-st.sidebar.title("📑 Logistics Tools")
-page = st.sidebar.selectbox("Select Tool", ["Quote Request Generator", "Packing List (Coming Soon)"])
+        # Itemized Table
+        self.set_font('Arial', 'B', 8)
+        cols = ["SKU", "HTS Code", "Origin", "Description", "Qty", "Unit Price", "Total"]
+        widths = [25, 25, 15, 60, 15, 25, 25]
+        for i, col in enumerate(cols):
+            self.cell(widths[i], 8, col, border=1, fill=True, align='C')
+        self.ln()
 
-# Shared Lists
-destinations = [
-    "UK - Radial FAO Monat, 26, 26 Broadgate, Chadderton, Middleton Oldham OL9 9XA",
-    "POLAND - Radial Poland Sp. z o.o. Moszna Parcela 29, Budynek C3 05-840 Brwinów",
-    "AUSTRALIA - FDM WAREHOUSING C/O Landmark Global 7 Eucalyptus Place",
-    "MONAT Global Canada — 135 SPARKS AVE NORTH YORK ON M2H 2S5 Canada",
-    "FENIX FWD INC. - 417 LOGISTIC LAREDO, TEXAS 78045",
-    "OTHER (Type Manually below)"
-]
+        self.set_font('Arial', '', 7)
+        grand_total = 0
+        for _, row in invoice_df.iterrows():
+            grand_total += row['Total']
+            self.cell(widths[0], 7, str(row['SKU']), border=1)
+            self.cell(widths[1], 7, str(row['HTS']), border=1, align='C')
+            self.cell(widths[2], 7, "USA", border=1, align='C')
+            self.cell(widths[3], 7, str(row['Description'])[:40], border=1)
+            self.cell(widths[4], 7, str(row['Qty']), border=1, align='C')
+            self.cell(widths[5], 7, f"${row['Unit Price']:.3f}", border=1, align='R')
+            self.cell(widths[6], 7, f"${row['Total']:,.2f}", border=1, align='R', ln=1)
 
-services = ["40\" REEFER", "40\" DRY", "20\" DRY", "HAZMAT LCL", "LCL Ocean", "LTL Road", "Air Freight", "Courier"]
+        # Totals
+        self.set_font('Arial', 'B', 9)
+        self.cell(sum(widths[:-1]), 10, "SUB-TOTAL (USD)", border=1, align='R')
+        self.cell(widths[-1], 10, f"${grand_total:,.2f}", border=1, align='R', ln=1)
+        
+        # Legal Disclaimer from Template
+        self.ln(5)
+        self.set_font('Arial', 'I', 6)
+        disclaimer = "THIS DELIVERY BECOMES A CONTRACT AND IS FIRM AND NON-CANCELABLE... ALL BILLS ARE PAYABLE AND DUE IN ACCORD WITH TERMS HEREON INDICATED."
+        self.multi_cell(0, 3, disclaimer, border=0)
 
-if page == "Quote Request Generator":
-    st.title("📦 Quote Request Pipeline")
+# --- PORTAL LOGIC ---
+st.set_page_config(page_title="Logistics Portal", layout="wide")
+page = st.sidebar.selectbox("Select Tool", ["Quote Generator", "Commercial Invoice Generator"])
+
+# Permanent HTS Database 
+@st.cache_data
+def load_hts_master():
+    try:
+        df = pd.read_csv("HTS Codes.xlsx - Sheet1.csv")
+        return df.set_index('Material')['Ext. Material Grp'].to_dict()
+    except: return {}
+
+hts_lookup = load_hts_master()
+
+if page == "Commercial Invoice Generator":
+    st.header("🧾 Commercial Invoice Generator")
     
     with st.sidebar:
-        st.header("Shipment Details")
-        selected_dest = st.selectbox("Select Destination", destinations)
-        destination = st.text_input("Manual Destination Entry", value=selected_dest) if selected_dest == "OTHER (Type Manually below)" else selected_dest
-        service = st.selectbox("Service", services)
-        commodity = st.text_input("Commodity", value="Finished goods / Haircare / Skincare")
-        cargo_value = st.text_input("Value of Cargo", value="USD$ ")
-        incoterms = st.selectbox("Incoterms", ["-", "EXW", "FOB", "DDP", "DAP", "CIF"])
+        st.header("Invoice Settings")
+        dest_info = st.text_area("Consignee Address", "MONAT GLOBAL CANADA\n135 SPARKS AVENUE\nNorth York, ON M2H 2S5")
+    
+    sap_file = st.file_uploader("Upload SAP Export (EXPORT-1.xlsx)", type=['csv', 'xlsx'])
 
-    packing_file = st.file_uploader("Upload Outbound Packing List (.xlsx)", type=['xlsx'])
+    if sap_file:
+        sap_df = pd.read_csv(sap_file) if sap_file.name.endswith('.csv') else pd.read_excel(sap_file)
+        unique_pos = sap_df['Purchasing Document'].unique().astype(str)
 
-    if packing_file:
-        df_raw = pd.read_excel(packing_file, header=None).astype(str)
+        # Processing 
+        invoice_rows = []
+        for _, row in sap_df.iterrows():
+            unit_price = float(row['Net Price']) / 1000  # Logic: Net/1000 [cite: 1]
+            qty = row['Order Quantity']
+            invoice_rows.append({
+                "SKU": str(row['Material']),
+                "HTS": hts_lookup.get(row['Material'], ""), # XLOOKUP 
+                "Description": row['Short Text'],
+                "Qty": qty,
+                "Unit Price": unit_price,
+                "Total": qty * unit_price
+            })
         
-        def get_val(keyword, row_off=0, col_off=0):
-            for r in range(len(df_raw)-1, -1, -1):
-                for c in range(len(df_raw.columns)):
-                    cell_val = str(df_raw.iloc[r, c]).lower().strip()
-                    if keyword.lower() == cell_val:
-                        try: return df_raw.iloc[r + row_off, c + col_off]
-                        except: return "0"
-            return "0"
+        # Interactive Editor for manual HTS entry
+        st.subheader("Invoice Data Review")
+        st.info("💡 You can manually type missing HTS codes directly into the table below.")
+        edited_df = st.data_editor(pd.DataFrame(invoice_rows), num_rows="dynamic")
 
-        def clean_num(val):
-            clean = re.sub(r'[^\d.]', '', str(val))
-            try: return float(clean)
-            except: return 0.0
-
-        # Data Extraction
-        pallets_final = int(clean_num(get_val("Pallets", row_off=-1)))
-        units_final = int(clean_num(get_val("Units", row_off=-1)))
-        lbs_final = clean_num(get_val("Gross Weight", row_off=-1))
-        kgs_final = lbs_final * 0.453592
-
-        # Dimension logic
-        dim_list = []
-        for c in range(len(df_raw.columns)):
-            if any("dim" in str(val).lower() and "pallet" in str(val).lower() for val in df_raw.iloc[:5, c]):
-                potential_dims = df_raw.iloc[3:, c].tolist()
-                dim_list = [d.strip() for d in potential_dims if "x" in str(d).lower() and len(str(d)) > 5]
-                break
-        dim_counts = Counter(dim_list)
-        formatted_dims = [f"{d} (x{count})" if count > 1 else d for d, count in dim_counts.items()]
-
-        st.success(f"✅ Data Extracted: **{pallets_final}** Pallets | **{units_final:,}** Units")
-
-        if st.button("🚀 Generate Quote Package"):
-            # 1. EXCEL GENERATION
-            quote_data = [["QUOTE REQUEST", ""], ["DESTINATION", destination], ["SERVICE", service], ["UNITS", f"{units_final:,}"], ["PALLETS", pallets_final]]
-            if formatted_dims:
-                quote_data.append(["DIMENSIONS", formatted_dims[0]])
-                for extra_dim in formatted_dims[1:]: quote_data.append(["", extra_dim])
-            quote_data.extend([["", ""], ["TOTAL WEIGHT", f"{lbs_final:,.2f} LBS | {kgs_final:,.2f} KGS"], ["COMMODITY", commodity], ["INCOTERMS", incoterms], ["VALUE OF CARGO", cargo_value]])
+        if st.button("🛠️ Generate Final Documents"):
+            # PDF Creation
+            pdf = InvoicePDF()
+            pdf.create_invoice(edited_df, dest_info, unique_pos)
+            pdf_bytes = pdf.output(dest='S').encode('latin-1')
             
-            df_output = pd.DataFrame(quote_data)
+            # Excel Creation
             excel_buf = io.BytesIO()
             with pd.ExcelWriter(excel_buf, engine='openpyxl') as writer:
-                df_output.to_excel(writer, index=False, header=False)
-
-            # 2. PDF GENERATION
-            shipment_info = {
-                "DESTINATION": destination, "SERVICE": service, "TOTAL UNITS": f"{units_final:,}", 
-                "TOTAL PALLETS": pallets_final, "TOTAL WEIGHT": f"{lbs_final:,.2f} LBS | {kgs_final:,.2f} KGS",
-                "COMMODITY": commodity, "INCOTERMS": incoterms, "VALUE": cargo_value
-            }
-            pdf = QuotePDF()
-            pdf.add_page()
-            pdf.create_table(shipment_info, formatted_dims)
-            pdf_bytes = pdf.output(dest='S').encode('latin-1')
-
-            # 3. EMAIL GENERATION
-            dim_string = "".join([f"\n- **Dimensions**: {d}" for d in formatted_dims])
-            email_body = f"Hi Team,\n\nHope you are having a great week! \n\nPlease find the details below for a new {service} shipment quote:\n\n- **Destination**: {destination}\n- **Service**: {service}\n- **Total Units**: {units_final:,}\n- **Pallets**: {pallets_final}{dim_string}\n- **Total Weight**: {lbs_final:,.2f} LBS | {kgs_final:,.2f} KGS\n- **Commodity**: {commodity}\n- **Value**: {cargo_value}\n- **Incoterms**: {incoterms}\n\nPlease let us know the best rates and estimated transit times for this. \n\nAttached are the Quote Request and Packing List.\n\nThanks!"
+                edited_df.to_excel(writer, index=False)
 
             st.divider()
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("1. Download Documents")
-                st.download_button("📥 Download Excel Quote", data=excel_buf.getvalue(), file_name=f"Quote_{pallets_final}PLTS.xlsx")
-                st.download_button("📥 Download PDF Quote", data=pdf_bytes, file_name=f"Quote_{pallets_final}PLTS.pdf", mime="application/pdf")
-                st.table(df_output)
-            with col2:
-                st.subheader("2. Email Draft")
-                st.code(email_body, language="markdown")
-                st.info("💡 Click the 'Copy' icon in the top-right of the box above.")
-
-elif page == "Packing List (Coming Soon)":
-    st.title("📄 Packing List Converter")
-    st.info("Standing by for your specialized layout instructions. Once provided, we will integrate the Excel-to-PDF logic here.")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.download_button("📥 Download PDF Invoice", data=pdf_bytes, file_name=f"Invoice_{unique_pos[0]}.pdf")
+            with c2:
+                st.download_button("📥 Download Excel Invoice", data=excel_buf.getvalue(), file_name=f"Invoice_{unique_pos[0]}.xlsx")
