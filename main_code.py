@@ -33,32 +33,21 @@ def clean_sku(val):
     return s
 
 def get_hts_map():
-    """Loads HTS codes dynamically using your new simplified file structure."""
+    """Loads HTS codes dynamically using your Cleaned_HTS_Codes.csv file."""
     try:
-        # 1. Find the exact folder where app.py is currently living
         current_folder = os.path.dirname(os.path.abspath(__file__))
-        
-        # 2. Attach the NEW file name 
         file_path = os.path.join(current_folder, "Cleaned_HTS_Codes.csv")
         
-        # 3. Read the file
         df = pd.read_csv(file_path, dtype=str)
-        
-        # Clean column headers
         df.columns = df.columns.str.strip()
         
-        # Apply the exact same cleaning function to your NEW column names
         df['SKU'] = df['SKU'].apply(clean_sku)
         df['HTS'] = df['HTS'].fillna('').apply(clean_sku)
         
-        # Create the dictionary using SKU as the key and HTS as the value
         return df[df['SKU'] != ""].set_index('SKU')['HTS'].to_dict()
     
-    except FileNotFoundError:
-        st.error(f"⚠️ **ERROR:** Python looked for the file here, but couldn't find it:\n`{file_path}`")
-        return {}
     except Exception as e:
-        st.error(f"⚠️ **ERROR:** Something went wrong reading the HTS file. Make sure the columns are named 'SKU' and 'HTS'. Details: {e}")
+        st.error(f"⚠️ **ERROR:** Could not read Cleaned_HTS_Codes.csv. Details: {e}")
         return {}
 
 # ==========================================
@@ -101,7 +90,6 @@ st.set_page_config(page_title="Logistics Document Portal", layout="wide")
 st.sidebar.title("📑 Logistics Tools")
 page = st.sidebar.selectbox("Select Tool", ["Quote Request Generator", "Invoice Line Item Extractor"])
 
-# Load HTS map fresh every time
 hts_map = get_hts_map()
 
 # --- TOOL 1: QUOTE REQUEST GENERATOR ---
@@ -194,26 +182,22 @@ if page == "Quote Request Generator":
 # --- TOOL 2: INVOICE LINE ITEM EXTRACTOR ---
 elif page == "Invoice Line Item Extractor":
     st.title("🧾 Invoice Line Item Extractor")
-    st.markdown("Upload your **Export** file to instantly generate a ready-to-copy line item table for your Excel template. It will automatically match HTS codes and calculate unit pricing.")
+    st.markdown("Upload your **Export** file to instantly generate a ready-to-copy line item table.")
     
     sap_file = st.file_uploader("Upload SAP Export (Export.xlsx or Export.csv)", type=['csv', 'xlsx'])
 
     if sap_file:
-        # Read the file
         if sap_file.name.endswith('.csv'):
             raw_df = pd.read_csv(sap_file)
         else:
             raw_df = pd.read_excel(sap_file)
 
-        # Clean column headers so spaces don't break the code
         raw_df.columns = [str(col).strip() for col in raw_df.columns]
         
         invoice_rows = []
         for _, row in raw_df.iterrows():
-            # Clean the SKU from the export file the exact same way
             sku = clean_sku(row.get('Material', ''))
             
-            # Skip rows that don't have a valid SKU
             if not sku:
                 continue
                 
@@ -221,36 +205,30 @@ elif page == "Invoice Line Item Extractor":
             qty = clean_numeric(row.get('Order Quantity', 0))
             raw_net = clean_numeric(row.get('Net Price', 0))
             
-            # The exact math rule: Net Price / 1000
             u_price = raw_net / 1000
             total_val = qty * u_price
             
-            # Map HTS Code securely
             hts_code = hts_map.get(sku, "")
             
-            # Append to our new clean list (Pallet column successfully removed)
+            # --- ORIGIN RULE: Only '600' starts with USA ---
+            origin = "USA" if sku.startswith('600') else ""
+            
             invoice_rows.append({
                 "SKU": sku,
                 "HTS Code": hts_code,
-                "Origin": "",
+                "Origin": origin,
                 "Description": description,
                 "Quantity": int(qty),
                 "Unit Price": f"${u_price:,.3f}",  
                 "Total": f"${total_val:,.2f}"
             })
         
-        # Build the final DataFrame
         if invoice_rows:
             df_final = pd.DataFrame(invoice_rows)
-
-            # Display the results
             st.success(f"✅ Successfully extracted {len(df_final)} line items!")
-            st.info("💡 **How to use:** You can either copy the table below directly, or download it as an Excel file.")
             
-            # Display the dataframe cleanly without the row numbers (index)
             st.dataframe(df_final, use_container_width=True, hide_index=True)
             
-            # Create a downloadable Excel buffer
             excel_buffer = io.BytesIO()
             with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
                 df_final.to_excel(writer, index=False, sheet_name="Extracted_Items")
@@ -261,6 +239,5 @@ elif page == "Invoice Line Item Extractor":
                 file_name="Extracted_Line_Items.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
-            
         else:
-            st.warning("No valid SKUs found in the uploaded file. Please check the file formatting.")
+            st.warning("No valid SKUs found in the uploaded file.")
