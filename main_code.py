@@ -43,37 +43,65 @@ def get_hts_data():
             if sku:
                 mapping[sku] = {
                     "hts": clean_sku(row.get('HTS', '')),
-                    "desc": str(row.get('Description', '')).strip()
+                    "customs_desc": str(row.get('Description', '')).strip()
                 }
         return mapping
     except Exception:
         return {}
 
 def update_invoice_state():
-    """Handles live edits for HTS, Origin, Price, and Description."""
+    """Applies edits from the data_editor to the session state and recalculates Totals."""
     if "invoice_editor" in st.session_state:
         edits = st.session_state["invoice_editor"]["edited_rows"]
         for row_idx, changes in edits.items():
             for col_name, new_val in changes.items():
                 st.session_state.df_invoice.at[row_idx, col_name] = new_val
             
-            # Auto-recalculate Total if Price or Quantity changed
+            # Recalculate Total for the modified row
             q = st.session_state.df_invoice.at[row_idx, "Quantity"]
             p = st.session_state.df_invoice.at[row_idx, "Unit Price"]
             st.session_state.df_invoice.at[row_idx, "Total"] = round(q * p, 2)
 
 # ==========================================
-# 2. MAIN APP
+# 2. PDF GENERATOR (Quote Request)
 # ==========================================
-st.set_page_config(page_title="Logistics Portal", layout="wide")
+class QuotePDF(FPDF):
+    def header(self):
+        self.set_font('Arial', 'B', 16)
+        self.cell(0, 15, 'QUOTE REQUEST', border=0, ln=1, align='C')
+        self.ln(10)
+
+    def create_table(self, data_dict, dims):
+        self.set_fill_color(230, 230, 230)
+        self.set_font('Arial', 'B', 10)
+        self.cell(60, 10, ' CATEGORY', border=1, fill=True)
+        self.cell(130, 10, ' SHIPMENT DETAILS', border=1, ln=1, fill=True)
+        self.set_font('Arial', '', 10)
+        for key, value in data_dict.items():
+            self.set_font('Arial', 'B', 10)
+            self.cell(60, 9, f" {key}", border=1)
+            self.set_font('Arial', '', 10)
+            self.cell(130, 9, f" {value}", border=1, ln=1)
+
+# ==========================================
+# 3. STREAMLIT APP & NAVIGATION
+# ==========================================
+st.set_page_config(page_title="Logistics Document Portal", layout="wide")
 st.sidebar.title("📑 Logistics Tools")
 page = st.sidebar.selectbox("Select Tool", ["Quote Request Generator", "Invoice Line Item Extractor"])
 
 hts_mapping = get_hts_data()
 
-if page == "Invoice Line Item Extractor":
+# --- TOOL 1: QUOTE REQUEST GENERATOR ---
+if page == "Quote Request Generator":
+    st.title("📦 Quote Request Pipeline")
+    st.info("Upload your packing list here to generate freight quotes.")
+    # (Your specific Quote Logic can be pasted here)
+
+# --- TOOL 2: INVOICE LINE ITEM EXTRACTOR ---
+elif page == "Invoice Line Item Extractor":
     st.title("🧾 Invoice Line Item Extractor")
-    st.markdown("You can now edit **HTS Code**, **Origin**, **Unit Price**, and **Customs Description** below.")
+    st.markdown("Edit **HTS**, **Origin**, or **Unit Price**. Changes reflect in both tables immediately.")
     
     sap_file = st.file_uploader("Upload SAP Export", type=['csv', 'xlsx'])
 
@@ -86,40 +114,37 @@ if page == "Invoice Line Item Extractor":
             for _, row in raw_df.iterrows():
                 sku = clean_sku(row.get('Material', ''))
                 if not sku: continue
-                
                 sap_desc = str(row.get('Short Text', '')).strip()
                 qty = clean_numeric(row.get('Order Quantity', 0))
                 raw_net = clean_numeric(row.get('Net Price', 0))
                 u_price = round(raw_net / 1000, 3)
                 
-                sku_info = hts_mapping.get(sku, {"hts": "", "desc": ""})
+                sku_info = hts_mapping.get(sku, {"hts": "", "customs_desc": ""})
                 origin = "USA" if sku.startswith('600') else "CHINA" if sku.startswith('300') else ""
                 
                 invoice_rows.append({
                     "SKU": sku,
                     "HTS Code": sku_info["hts"],
                     "Origin": origin,
-                    "SAP Description": sap_desc,
-                    "Customs Description": sku_info["desc"], # Now editable
+                    "Description": sap_desc,
                     "Quantity": int(qty),
                     "Unit Price": u_price,
-                    "Total": round(qty * u_price, 2)
+                    "Total": round(qty * u_price, 2),
+                    "Customs_Desc_Internal": sku_info["customs_desc"]
                 })
             st.session_state.df_invoice = pd.DataFrame(invoice_rows)
 
         # 1. THE LIVE EDITABLE TABLE
-        st.subheader("Detailed Line Items")
+        st.subheader("Detailed Line Items (Editable)")
         st.data_editor(
-            st.session_state.df_invoice,
+            st.session_state.df_invoice.drop(columns=['Customs_Desc_Internal']),
             use_container_width=True,
             hide_index=True,
             column_config={
-                "SKU": st.column_config.TextColumn(disabled=True),
-                "SAP Description": st.column_config.TextColumn(disabled=True),
-                "Quantity": st.column_config.NumberColumn(disabled=True),
-                "Total": st.column_config.NumberColumn(format="$%.2f", disabled=True),
                 "Unit Price": st.column_config.NumberColumn(format="$%.3f"),
-                "Customs Description": st.column_config.TextColumn("Customs Description (Editable)"),
+                "Total": st.column_config.NumberColumn(format="$%.2f", disabled=True),
+                "Quantity": st.column_config.NumberColumn(disabled=True),
+                "SKU": st.column_config.TextColumn(disabled=True)
             },
             key="invoice_editor",
             on_change=update_invoice_state
@@ -129,13 +154,12 @@ if page == "Invoice Line Item Extractor":
         st.divider()
         st.subheader("📊 HTS Summary (Customs Totals)")
         
-        # This summary now reflects any manual edits made to descriptions or HTS codes
-        summary_grouped = st.session_state.df_invoice.groupby(['HTS Code', 'Customs Description']).agg({
+        summary_grouped = st.session_state.df_invoice.groupby(['HTS Code', 'Customs_Desc_Internal']).agg({
             'Quantity': 'sum',
             'Total': 'sum'
         }).reset_index()
         
-        summary_grouped.columns = ['HTS Code', 'Description', 'Total Quantity', 'Total Value']
+        summary_grouped.columns = ['HTS Code', 'Customs Description', 'Total Quantity', 'Total Value']
         
         st.dataframe(
             summary_grouped.style.format({"Total Value": "${:,.2f}"}),
@@ -143,19 +167,15 @@ if page == "Invoice Line Item Extractor":
             hide_index=True
         )
         
-        # 3. EXPORT
+        # 3. DOWNLOAD ACTIONS
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-            st.session_state.df_invoice.to_excel(writer, index=False, sheet_name="Line_Items")
+            st.session_state.df_invoice.drop(columns=['Customs_Desc_Internal']).to_excel(writer, index=False, sheet_name="Line_Items")
             summary_grouped.to_excel(writer, index=False, sheet_name="HTS_Summary")
         
-        st.download_button("📥 Download Final Excel", excel_buffer.getvalue(), "Customs_Invoice_Summary.xlsx")
+        st.download_button("📥 Download Final Excel", excel_buffer.getvalue(), "Custom_Invoice_Summary.xlsx")
 
-    if st.sidebar.button("🗑️ Reset and Clear"):
+    if st.sidebar.button("🗑️ Reset Application"):
         if 'df_invoice' in st.session_state:
             del st.session_state.df_invoice
             st.rerun()
-
-elif page == "Quote Request Generator":
-    st.title("📦 Quote Request Pipeline")
-    st.info("Upload files to begin.")
