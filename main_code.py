@@ -103,13 +103,12 @@ if st.session_state.active_tool is None:
 # 4. MAIN APP CONTENT
 # ==========================================
 else:
-    # Navigation to go back
     if st.sidebar.button("⬅️ Back to Portal"):
         if 'df_detailed' in st.session_state: del st.session_state.df_detailed
         st.session_state.active_tool = None
         st.rerun()
 
-    # --- TOOL 1: QUOTE PIPELINE (Preserved Exactly) ---
+    # --- TOOL 1: QUOTE PIPELINE ---
     if st.session_state.active_tool == "Quote Pipeline":
         st.sidebar.title("Shipment Details")
         destinations = [
@@ -190,7 +189,7 @@ else:
                     st.subheader("2. Email Draft")
                     st.code(email_body, language="markdown")
 
-    # --- TOOL 2: INVOICE EXTRACTOR (Updated Weight Logic) ---
+    # --- TOOL 2: INVOICE EXTRACTOR (FIXED FOR MULTI-PO) ---
     elif st.session_state.active_tool == "Invoice Extractor":
         st.title("🧾 Invoice Line Item Extractor")
         
@@ -201,29 +200,28 @@ else:
         if sap_file and pl_file:
             hts_mapping = get_hts_data()
             
-            # Find header in Packing List
-            temp_df = pd.read_excel(pl_file, header=None) if pl_file.name.endswith('.xlsx') else pd.read_csv(pl_file, header=None)
-            header_row = 0
-            for i, row in temp_df.head(10).iterrows():
-                if any(x in str(row.values).lower() for x in ["sku", "material"]):
-                    header_row = i
-                    break
-            
-            pl_df = pd.read_excel(pl_file, header=header_row) if pl_file.name.endswith('.xlsx') else pd.read_csv(pl_file, header=header_row)
-            pl_df.columns = [str(c).strip() for c in pl_df.columns]
-            
+            # --- Robust Multi-PO Weight Extraction ---
+            temp_pl = pd.read_excel(pl_file, header=None) if pl_file.name.endswith('.xlsx') else pd.read_csv(pl_file, header=None)
             weight_map = {}
-            for _, row in pl_df.iterrows():
-                sku = clean_sku(row.get('SKU') or row.get('Material'))
-                if not sku: continue
-                
-                # Using requested 'Total Weight / Box' logic
-                tw_box = clean_numeric(row.get('Total Weight / Box'))
-                t_units = clean_numeric(row.get('Total Units'))
-                
-                if t_units > 0:
-                    weight_map[sku] = (tw_box / t_units) * 0.453592
+            current_cols = None
 
+            for i, row in temp_pl.iterrows():
+                row_vals = [str(x).strip() for x in row.values]
+                # Identify header row anywhere in the file
+                if any(x in str(row_vals).lower() for x in ["sku", "material"]):
+                    current_cols = [v.replace('\n', ' ').strip() for v in row_vals]
+                    continue
+                
+                if current_cols:
+                    row_dict = dict(zip(current_cols, row.values))
+                    sku = clean_sku(row_dict.get('SKU') or row_dict.get('Material'))
+                    if sku and sku != "nan":
+                        tw_box = clean_numeric(row_dict.get('Total Weight / Box') or row_dict.get('Tot. Weight / Bxs'))
+                        t_units = clean_numeric(row_dict.get('Total Units'))
+                        if t_units > 0:
+                            weight_map[sku] = (tw_box / t_units) * 0.453592
+
+            # --- SAP Processing (Original Price Logic) ---
             if 'df_detailed' not in st.session_state:
                 raw_df = pd.read_csv(sap_file) if sap_file.name.endswith('.csv') else pd.read_excel(sap_file)
                 raw_df.columns = [str(col).strip() for col in raw_df.columns]
@@ -232,12 +230,16 @@ else:
                 for _, row in raw_df.iterrows():
                     sku = clean_sku(row.get('Material', ''))
                     if not sku: continue
+                    
                     sku_info = hts_mapping.get(sku, {"hts": "", "desc": ""})
                     qty = clean_numeric(row.get('Order Quantity', 0))
+                    
+                    # Original logic as per your request
                     u_price = round(clean_numeric(row.get('Net Price', 0)) / 1000, 3)
                     u_weight = weight_map.get(sku, 0.0)
                     
                     rows.append({
+                        "PO#": str(row.get('Purchasing Document', '')),
                         "SKU": sku, "HTS Code": sku_info["hts"],
                         "Origin": "USA" if sku.startswith('600') else "CHINA" if sku.startswith('300') else "",
                         "Description": str(row.get('Short Text', '')).strip(),
