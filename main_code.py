@@ -19,7 +19,7 @@ st.markdown("""
         color: white; 
         border-radius: 5px; 
         width: 100%;
-        height: 100px;
+        height: 80px;
         font-size: 20px;
         font-weight: bold;
     }
