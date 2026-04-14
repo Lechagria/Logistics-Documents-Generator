@@ -69,7 +69,6 @@ def update_detailed_state():
             for col_name, new_val in changes.items():
                 st.session_state.df_detailed.at[row_idx, col_name] = new_val
             
-            # Recalculate Row Totals
             qty = st.session_state.df_detailed.at[row_idx, "Quantity"]
             price = st.session_state.df_detailed.at[row_idx, "Unit Price"]
             u_weight = st.session_state.df_detailed.at[row_idx, "Unit_Weight_KG"]
@@ -106,40 +105,47 @@ else:
     # --- TOOL 1: QUOTE PIPELINE ---
     if st.session_state.active_tool == "Quote Pipeline":
         st.title("📦 Logistics Quote Pipeline")
-        # [Existing Quote Pipeline Code remains same...]
-        st.info("Quote tool logic active.")
+        st.info("Upload your packing list to generate templates.")
 
-    # --- TOOL 2: INVOICE EXTRACTOR (REPAIRED WEIGHT LOGIC) ---
+    # --- TOOL 2: INVOICE EXTRACTOR ---
     elif st.session_state.active_tool == "Invoice Extractor":
         st.title("🧾 Invoice Line Item Extractor")
         
         c1, c2 = st.columns(2)
         with c1: sap_file = st.file_uploader("1. Upload SAP Export", type=['csv', 'xlsx'])
-        with c2: pl_file = st.file_uploader("2. Upload Packing List (for Weights)", type=['csv', 'xlsx'])
+        with c2: pl_file = st.file_uploader("2. Upload Packing List", type=['csv', 'xlsx'])
 
         if sap_file and pl_file:
             hts_mapping = get_hts_data()
             
-            # 1. Parse Packing List for SKU -> Unit Weight (KG)
-            # We skip rows to find the actual header in the PL
-            pl_df = pd.read_excel(pl_file, header=2) if pl_file.name.endswith('.xlsx') else pd.read_csv(pl_file, header=2)
+            # --- PACKING LIST WEIGHT EXTRACTION ---
+            # Load raw to find header
+            temp_df = pd.read_excel(pl_file, header=None) if pl_file.name.endswith('.xlsx') else pd.read_csv(pl_file, header=None)
+            
+            header_row = 0
+            for i, row in temp_df.head(10).iterrows():
+                if "SKU" in row.values or "Material" in row.values:
+                    header_row = i
+                    break
+            
+            pl_df = pd.read_excel(pl_file, header=header_row) if pl_file.name.endswith('.xlsx') else pd.read_csv(pl_file, header=header_row)
             pl_df.columns = [str(c).strip() for c in pl_df.columns]
             
             weight_map = {}
-            # Logic: Use "Tot. Weight / Bxs" (Col N) divided by "Box" (Col F) or "Total Units"
-            # To be safe, we calculate weight per single item
             for _, row in pl_df.iterrows():
-                sku = clean_sku(row.get('SKU'))
+                sku = clean_sku(row.get('SKU') or row.get('Material'))
                 if not sku: continue
                 
-                total_weight_lbs = clean_numeric(row.get('Tot. Weight / Bxs'))
-                total_units = clean_numeric(row.get('Total Units'))
+                # Using your clarified column name 'Total Weight / Box'
+                # Logic: Total Weight / Box (Col N) divided by Total Units (Col I)
+                tw_box = clean_numeric(row.get('Total Weight / Box') or row.get('Tot. Weight / Bxs'))
+                t_units = clean_numeric(row.get('Total Units'))
                 
-                if total_units > 0:
-                    unit_weight_lbs = total_weight_lbs / total_units
-                    weight_map[sku] = unit_weight_lbs * 0.453592 # Convert to KG
+                if t_units > 0:
+                    unit_kg = (tw_box / t_units) * 0.453592
+                    weight_map[sku] = unit_kg
 
-            # 2. Process SAP and Join Weights
+            # --- SAP JOIN ---
             if 'df_detailed' not in st.session_state:
                 raw_df = pd.read_csv(sap_file) if sap_file.name.endswith('.csv') else pd.read_excel(sap_file)
                 raw_df.columns = [str(col).strip() for col in raw_df.columns]
@@ -152,71 +158,48 @@ else:
                     sku_info = hts_mapping.get(sku, {"hts": "NOT FOUND", "desc": ""})
                     qty = clean_numeric(row.get('Order Quantity', 0))
                     u_price = round(clean_numeric(row.get('Net Price', 0)) / 1000, 3)
-                    
-                    u_weight_kg = weight_map.get(sku, 0.0)
+                    u_weight = weight_map.get(sku, 0.0)
                     
                     rows.append({
-                        "SKU": sku,
-                        "HTS Code": sku_info["hts"],
+                        "SKU": sku, "HTS Code": sku_info["hts"],
                         "Origin": "USA" if sku.startswith('600') else "CHINA" if sku.startswith('300') else "",
                         "Description": str(row.get('Short Text', '')).strip(),
-                        "Quantity": int(qty),
-                        "Unit Price": u_price,
-                        "Total": round(qty * u_price, 2),
-                        "Unit_Weight_KG": u_weight_kg, # Helper
-                        "Total Weight (KG)": round(qty * u_weight_kg, 2),
+                        "Quantity": int(qty), "Unit Price": u_price, "Total": round(qty * u_price, 2),
+                        "Unit_Weight_KG": u_weight, "Total Weight (KG)": round(qty * u_weight, 2),
                         "Customs_Desc_Internal": sku_info["desc"]
                     })
                 st.session_state.df_detailed = pd.DataFrame(rows)
 
-            # 3. Display Detailed Table
+            # --- DISPLAYS ---
             st.subheader("Detailed Line Items (Editable)")
-            display_df = st.session_state.df_detailed.drop(columns=['Customs_Desc_Internal', 'Unit_Weight_KG'])
-            
             edited_detailed = st.data_editor(
-                display_df,
-                use_container_width=True,
-                hide_index=True,
+                st.session_state.df_detailed.drop(columns=['Customs_Desc_Internal', 'Unit_Weight_KG']),
+                use_container_width=True, hide_index=True,
                 column_config={
                     "Unit Price": st.column_config.NumberColumn(format="$%.3f"),
-                    "Total": st.column_config.NumberColumn(format="$%.2f", disabled=True),
                     "Total Weight (KG)": st.column_config.NumberColumn(format="%.2f kg", disabled=True)
                 },
-                key="detailed_editor",
-                on_change=update_detailed_state
+                key="detailed_editor", on_change=update_detailed_state
             )
 
-            # 4. Aggregate HTS Summary
-            st.markdown("### 📊 HTS Summary (Customs Totals)")
-            
-            # Merge with internal descriptions for grouping
-            summary_base = edited_detailed.merge(
+            st.markdown("### 📊 HTS Summary (SLI Weight Breakdown)")
+            summary_grouped = edited_detailed.merge(
                 st.session_state.df_detailed[['SKU', 'Customs_Desc_Internal']], on='SKU', how='left'
-            )
-            
-            summary_grouped = summary_base.groupby(['HTS Code', 'Customs_Desc_Internal']).agg({
-                'Quantity': 'sum',
-                'Total': 'sum',
-                'Total Weight (KG)': 'sum'
+            ).groupby(['HTS Code', 'Customs_Desc_Internal']).agg({
+                'Quantity': 'sum', 'Total': 'sum', 'Total Weight (KG)': 'sum'
             }).reset_index()
             
             summary_grouped.columns = ['HTS Code', 'Customs Description', 'Total Qty', 'Total Value', 'Total Weight (KG)']
 
             st.data_editor(
-                summary_grouped,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Total Value": st.column_config.NumberColumn(format="$%.2f"),
-                    "Total Weight (KG)": st.column_config.NumberColumn(format="%.2f kg")
-                },
+                summary_grouped, use_container_width=True, hide_index=True,
+                column_config={"Total Value": st.column_config.NumberColumn(format="$%.2f"),
+                               "Total Weight (KG)": st.column_config.NumberColumn(format="%.2f kg")},
                 key="summary_editor"
             )
 
-            # 5. Export
             excel_buf = io.BytesIO()
             with pd.ExcelWriter(excel_buf, engine='openpyxl') as writer:
                 edited_detailed.to_excel(writer, index=False, sheet_name="Details")
-                summary_grouped.to_excel(writer, index=False, sheet_name="HTS_Summary")
-            
-            st.download_button("📥 Download Final SLI Excel", data=excel_buf.getvalue(), file_name="Customs_Invoice_Weights.xlsx")
+                summary_grouped.to_excel(writer, index=False, sheet_name="Summary")
+            st.download_button("📥 Download SLI Excel", excel_buf.getvalue(), "SLI_Invoice.xlsx")
