@@ -19,7 +19,7 @@ st.markdown("""
         color: white; 
         border-radius: 5px; 
         width: 100%;
-        height: 100px;
+        height: 60px;
         font-size: 20px;
         font-weight: bold;
     }
@@ -88,13 +88,13 @@ if st.session_state.active_tool is None:
     col1, col2 = st.columns(2)
     
     with col1:
-        if st.button("📦 Logistics Quote Pipeline"):
+        if st.button("📦 Quote Generator"):
             st.session_state.active_tool = "Quote Pipeline"
             st.rerun()
         st.info("Extract packing list data and generate shipment quote templates for carriers.")
 
     with col2:
-        if st.button("🧾 Invoice Line Item Extractor"):
+        if st.button("🧾 Data Extractor for Invoice & SLI"):
             st.session_state.active_tool = "Invoice Extractor"
             st.rerun()
         st.info("Convert SAP Exports into formatted Customs Invoices with editable HTS summaries.")
@@ -128,7 +128,7 @@ else:
         cargo_value = st.sidebar.text_input("Value of Cargo", value="USD$ ")
         incoterms = st.sidebar.selectbox("Incoterms", ["-", "EXW", "FOB", "DDP", "DAP", "CIF"])
 
-        st.title("📦 Logistics Quote Pipeline")
+        st.title("📦 Quote Generator")
         packing_file = st.file_uploader("Upload Outbound Packing List (.xlsx)", type=['xlsx'])
 
         if packing_file:
@@ -159,7 +159,7 @@ else:
 
             st.success(f"✅ Data Extracted: **{pallets_final}** Pallets | **{units_final:,}** Units")
 
-            if st.button("🚀 Generate Template"):
+            if st.button("Generate Template"):
                 quote_data = [
                     ["QUOTE REQUEST", ""], ["DESTINATION", destination], ["SERVICE", service],
                     ["UNITS", f"{units_final:,}"], ["PALLETS", pallets_final]
@@ -177,7 +177,7 @@ else:
                     df_output.to_excel(writer, index=False, header=False)
 
                 dim_string = "".join([f"\n- **Dimensions**: {d}" for d in formatted_dims])
-                email_body = f"Hi Team,\n\nHope you are having a great week! \n\nPlease find the details below for a new {service} shipment quote:\n\n- **Destination**: {destination}\n- **Service**: {service}\n- **Total Units**: {units_final:,}\n- **Pallets**: {pallets_final}{dim_string}\n- **Total Weight**: {lbs_final:,.2f} LBS | {kgs_final:,.2f} KGS\n- **Commodity**: {commodity}\n- **Value**: {cargo_value}\n- **Incoterms**: {incoterms}\n\nThanks!"
+                email_body = f"Hi Team,\n\nHope you are having a great week! \n\nPlease find the details below for a new {service} shipment quote — please include insurance cost:\n\n- • Destination: {destination}\n- • Service: {service}\n- • Total Units: {units_final:,}\n- • Pallets: {pallets_final}{dim_string}\n- • Total Weight: {lbs_final:,.2f} LBS | {kgs_final:,.2f} KGS\n- • Commodity: {commodity}\n- • Value: {cargo_value}\n- • Incoterms: {incoterms}\n\nThank you."
 
                 st.divider()
                 col1, col2 = st.columns(2)
@@ -191,7 +191,7 @@ else:
 
     # --- TOOL 2: INVOICE EXTRACTOR (FIXED FOR MULTI-PO) ---
     elif st.session_state.active_tool == "Invoice Extractor":
-        st.title("🧾 Invoice Line Item Extractor")
+        st.title("🧾 Data Extractor")
         
         c1, c2 = st.columns(2)
         with c1: sap_file = st.file_uploader("1. Upload SAP Export", type=['csv', 'xlsx'])
@@ -255,7 +255,6 @@ else:
                 use_container_width=True, hide_index=True,
                 column_config={
                     "Unit Price": st.column_config.NumberColumn(format="$%.3f"),
-                    "Total Weight (KG)": st.column_config.NumberColumn(format="%.2f kg", disabled=True)
                 },
                 key="detailed_editor", on_change=update_detailed_state
             )
