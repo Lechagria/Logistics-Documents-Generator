@@ -176,7 +176,7 @@ else:
                 with pd.ExcelWriter(buf, engine='openpyxl') as writer:
                     df_output.to_excel(writer, index=False, header=False)
 
-                dim_string = "".join([f"\n- **Dimensions**: {d}" for d in formatted_dims])
+                dim_string = "".join([f"\n- • Dimensions: {d}" for d in formatted_dims])
                 email_body = f"Hi Team,\n\nHope you are having a great week! \n\nPlease find the details below for a new {service} shipment quote — please include insurance cost:\n\n- • Destination: {destination}\n- • Service: {service}\n- • Total Units: {units_final:,}\n- • Pallets: {pallets_final}{dim_string}\n- • Total Weight: {lbs_final:,.2f} LBS | {kgs_final:,.2f} KGS\n- • Commodity: {commodity}\n- • Value: {cargo_value}\n- • Incoterms: {incoterms}\n\nThank you."
 
                 st.divider()
@@ -235,7 +235,7 @@ else:
                     qty = clean_numeric(row.get('Order Quantity', 0))
                     
                     # Original logic as per your request
-                    u_price = round(clean_numeric(row.get('Net Price', 0)) / 1000, 3)
+                    u_price = round(clean_numeric(row.get('Net Price', 0)) / 1000, 2)
                     u_weight = weight_map.get(sku, 0.0)
                     
                     rows.append({
@@ -244,7 +244,6 @@ else:
                         "Origin": "USA" if sku.startswith('600') else "CHINA" if sku.startswith('300') else "",
                         "Description": str(row.get('Short Text', '')).strip(),
                         "Quantity": int(qty), "Unit Price": u_price, "Total": round(qty * u_price, 2),
-                        "Unit_Weight_KG": u_weight, "Total Weight (KG)": round(qty * u_weight, 2),
                         "Customs_Desc_Internal": sku_info["desc"]
                     })
                 st.session_state.df_detailed = pd.DataFrame(rows)
