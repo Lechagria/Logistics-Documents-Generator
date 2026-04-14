@@ -93,54 +93,53 @@ hts_mapping = get_hts_data()
 
 # --- TOOL 1: QUOTE REQUEST GENERATOR ---
 if page == "Quote Request Generator":
-    st.title("📦 Quote Request Pipeline")
+    st.title("📦 Quote Request Generator")
     
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        st.subheader("1. Shipment Details")
-        q_origin = st.text_input("Origin (City/Port)", "Foshan, China")
-        q_dest = st.text_input("Destination", "Naranja, FL 33032")
-        q_mode = st.selectbox("Mode", ["Sea Freight (LCL)", "Sea Freight (FCL)", "Air Freight", "Trucking"])
-        q_incoterm = st.selectbox("Incoterm", ["EXW", "FOB", "CIF", "DDP"])
+        st.subheader("1. General Information")
+        q_origin = st.text_input("Origin (City, Country)", "Foshan, China")
+        q_dest = st.text_input("Destination (City, Zip Code)", "Naranja, FL 33032")
+        q_mode = st.selectbox("Shipping Mode", ["Sea Freight (LCL)", "Sea Freight (FCL)", "Air Freight", "Trucking"])
+        q_incoterm = st.selectbox("Incoterm", ["EXW", "FOB", "CIF", "DDP", "DAP"])
         q_ready = st.date_input("Ready Date", datetime.date.today())
-        q_notes = st.text_area("Special Instructions", "N/A")
-
-    with col2:
-        st.subheader("2. Upload Packing List")
-        pl_file = st.file_uploader("Upload Packing List (CSV/Excel)", type=['csv', 'xlsx'], key="pl_upload")
         
-        if pl_file:
-            pl_df = pd.read_csv(pl_file) if pl_file.name.endswith('.csv') else pd.read_excel(pl_file)
-            st.success("File uploaded successfully!")
-            
-            # Simple aggregation logic for the quote
-            total_pkgs = len(pl_df)
-            total_weight = pl_df.iloc[:, -1].sum() if not pl_df.empty else 0 # Assuming last col is weight
-            
-            shipment_data = {
-                "Origin": q_origin,
-                "Destination": q_dest,
-                "Service Mode": q_mode,
-                "Incoterms": q_incoterm,
-                "Ready Date": q_ready.strftime("%Y-%m-%d"),
-                "Total Packages": f"{total_pkgs} Cartons",
-                "Est. Total Weight": f"{total_weight} KG",
-                "Notes": q_notes
-            }
+    with col2:
+        st.subheader("2. Loading Details")
+        q_load_type = st.selectbox("Load Type", ["Palletized", "Loose Cartons", "Floor Loaded"])
+        q_units = st.text_input("Total Quantity / Units", "10 Pallets")
+        q_dims = st.text_input("Dimensions (L x W x H)", "120x100x200 cm per pallet")
+        q_weight = st.text_input("Total Weight (KG)", "1500 KG")
+        q_notes = st.text_area("Special Instructions", "Stackable, fragile items.")
 
-            if st.button("Generate Quote PDF"):
-                pdf = QuotePDF()
-                pdf.add_page()
-                pdf.create_table(shipment_data)
-                
-                pdf_output = pdf.output(dest='S').encode('latin-1')
-                st.download_button(
-                    label="📥 Download Quote Request",
-                    data=pdf_output,
-                    file_name=f"Quote_Request_{q_origin}.pdf",
-                    mime="application/pdf"
-                )
+    st.divider()
+    
+    shipment_data = {
+        "Origin": q_origin,
+        "Destination": q_dest,
+        "Ready Date": q_ready.strftime("%Y-%m-%d"),
+        "Incoterms": q_incoterm,
+        "Service Mode": q_mode,
+        "Load Type": q_load_type,
+        "Qty / Units": q_units,
+        "Dimensions": q_dims,
+        "Total Weight": q_weight,
+        "Notes": q_notes
+    }
+
+    if st.button("🚀 Generate Quote PDF"):
+        pdf = QuotePDF()
+        pdf.add_page()
+        pdf.create_table(shipment_data)
+        
+        pdf_output = pdf.output(dest='S').encode('latin-1')
+        st.download_button(
+            label="📥 Download Quote Request PDF",
+            data=pdf_output,
+            file_name=f"Quote_Request_{q_origin}_to_{q_dest}.pdf",
+            mime="application/pdf"
+        )
 
 # --- TOOL 2: INVOICE LINE ITEM EXTRACTOR ---
 elif page == "Invoice Line Item Extractor":
@@ -222,7 +221,7 @@ elif page == "Invoice Line Item Extractor":
             edited_detailed.to_excel(writer, index=False, sheet_name="Detailed_Items")
             final_summary.to_excel(writer, index=False, sheet_name="HTS_Summary")
         
-        st.download_button("📥 Download Excel", excel_buffer.getvalue(), "Customs_Invoice.xlsx")
+        st.download_button("📥 Download Final Excel", excel_buffer.getvalue(), "Customs_Invoice_Summary.xlsx")
 
     if st.sidebar.button("🗑️ Clear Data"):
         if 'df_detailed' in st.session_state:
