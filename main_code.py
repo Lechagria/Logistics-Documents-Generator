@@ -1,42 +1,46 @@
 import streamlit as st
 import pandas as pd
-from collections import Counter
 import io
 import datetime
 from fpdf import FPDF
 import os
 
 # ==========================================
-# 1. HELPER FUNCTIONS
+# 1. THEME & PAGE CONFIG (Matches your UI)
+# ==========================================
+st.set_page_config(page_title="Logistics Portal", layout="wide")
+
+# Custom CSS to mimic the spacing and headers in your screenshots
+st.markdown("""
+    <style>
+    .main { background-color: #0E1117; }
+    div.stButton > button:first-child { background-color: #262730; color: white; border-radius: 5px; }
+    h1 { font-weight: 800; }
+    .stDataFrame { border: 1px solid #262730; border-radius: 5px; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# ==========================================
+# 2. HELPER FUNCTIONS
 # ==========================================
 def clean_numeric(value):
-    if pd.isna(value) or value == "":
-        return 0.0
-    if isinstance(value, (int, float)):
-        return float(value)
+    if pd.isna(value) or value == "": return 0.0
+    if isinstance(value, (int, float)): return float(value)
     clean_val = str(value).replace(',', '').replace('$', '').strip()
-    try:
-        return float(clean_val)
-    except ValueError:
-        return 0.0
+    try: return float(clean_val)
+    except ValueError: return 0.0
 
 def clean_sku(val):
-    if pd.isna(val): 
-        return ""
+    if pd.isna(val): return ""
     s = str(val).strip()
-    if s.endswith('.0'): 
-        s = s[:-2]
-    if s.lower() == 'nan': 
-        return ""
+    if s.endswith('.0'): s = s[:-2]
     return s
 
 def get_hts_data():
-    """Loads SKU mapping from Cleaned_HTS_Codes.csv."""
     try:
         current_folder = os.path.dirname(os.path.abspath(__file__))
         file_path = os.path.join(current_folder, "Cleaned_HTS_Codes.csv")
         df = pd.read_csv(file_path, dtype=str)
-        df.columns = [str(c).strip() for c in df.columns]
         mapping = {}
         for _, row in df.iterrows():
             sku = clean_sku(row.get('SKU', ''))
@@ -46,118 +50,69 @@ def get_hts_data():
                     "desc": str(row.get('Description', '')).strip()
                 }
         return mapping
-    except Exception:
-        return {}
+    except: return {}
 
 def update_detailed_state():
-    """Recalculates totals in the detailed table if Unit Price is edited."""
     if "detailed_editor" in st.session_state:
         edits = st.session_state["detailed_editor"]["edited_rows"]
         for row_idx, changes in edits.items():
             for col_name, new_val in changes.items():
                 st.session_state.df_detailed.at[row_idx, col_name] = new_val
-            # Update Total automatically
+            # Re-calc Total
             q = st.session_state.df_detailed.at[row_idx, "Quantity"]
             p = st.session_state.df_detailed.at[row_idx, "Unit Price"]
             st.session_state.df_detailed.at[row_idx, "Total"] = round(q * p, 2)
 
 # ==========================================
-# 2. PDF GENERATOR (FOR QUOTE REQUEST)
+# 3. SIDEBAR NAVIGATION & INPUTS
 # ==========================================
-class QuotePDF(FPDF):
-    def header(self):
-        self.set_font('Arial', 'B', 16)
-        self.cell(0, 15, 'QUOTE REQUEST - FREIGHT', border=0, ln=1, align='C')
-        self.ln(5)
+st.sidebar.title("Shipment Details")
 
-    def create_table(self, data_dict):
-        self.set_fill_color(240, 240, 240)
-        self.set_font('Arial', 'B', 10)
-        self.cell(60, 10, ' CATEGORY', border=1, fill=True)
-        self.cell(130, 10, ' SHIPMENT DETAILS', border=1, ln=1, fill=True)
-        self.set_font('Arial', '', 10)
-        for key, value in data_dict.items():
-            self.set_font('Arial', 'B', 10)
-            self.cell(60, 9, f" {key}", border=1)
-            self.set_font('Arial', '', 10)
-            self.cell(130, 9, f" {value}", border=1, ln=1)
+# This matches the first screenshot's sidebar layout
+app_mode = st.sidebar.selectbox("Select Tool", ["Quote Pipeline", "Invoice Extractor"])
+
+if app_mode == "Quote Pipeline":
+    st.sidebar.selectbox("Select Destination", ["UK - Radial FAO Monat, 26, 2..."])
+    st.sidebar.selectbox("Service", ["40\" REEFER", "20\" Standard", "Air Freight"])
+    st.sidebar.text_input("Commodity", "Finished goods / Haircare / Skincare")
+    st.sidebar.text_input("Value of Cargo", "USD$")
+    st.sidebar.selectbox("Incoterms", ["-", "EXW", "FOB", "DDP"])
+else:
+    # Sidebar for Invoice Extractor
+    st.sidebar.info("Upload SAP file in the main window to begin extraction.")
 
 # ==========================================
-# 3. MAIN APP
+# 4. MAIN APP CONTENT
 # ==========================================
-st.set_page_config(page_title="Logistics Portal", layout="wide")
-st.sidebar.title("📑 Logistics Tools")
-page = st.sidebar.selectbox("Select Tool", ["Quote Request Generator", "Invoice Line Item Extractor"])
 
-hts_mapping = get_hts_data()
-
-# --- TOOL 1: QUOTE REQUEST GENERATOR ---
-if page == "Quote Request Generator":
-    st.title("📦 Quote Request Generator")
+# --- TOOL 1: QUOTE PIPELINE (Visual Match for Image 4) ---
+if app_mode == "Quote Pipeline":
+    st.title("📦 Logistics Quote Pipeline")
+    st.markdown("### Upload Outbound Packing List (.xlsx)")
     
-    col1, col2 = st.columns([1, 1])
+    pl_file = st.file_uploader("", type=['xlsx'])
     
-    with col1:
-        st.subheader("1. General Information")
-        q_origin = st.text_input("Origin (City, Country)", "Foshan, China")
-        q_dest = st.text_input("Destination (City, Zip Code)", "Naranja, FL 33032")
-        q_mode = st.selectbox("Shipping Mode", ["Sea Freight (LCL)", "Sea Freight (FCL)", "Air Freight", "Trucking"])
-        q_incoterm = st.selectbox("Incoterm", ["EXW", "FOB", "CIF", "DDP", "DAP"])
-        q_ready = st.date_input("Ready Date", datetime.date.today())
-        
-    with col2:
-        st.subheader("2. Loading Details")
-        q_load_type = st.selectbox("Load Type", ["Palletized", "Loose Cartons", "Floor Loaded"])
-        q_units = st.text_input("Total Quantity / Units", "10 Pallets")
-        q_dims = st.text_input("Dimensions (L x W x H)", "120x100x200 cm per pallet")
-        q_weight = st.text_input("Total Weight (KG)", "1500 KG")
-        q_notes = st.text_area("Special Instructions", "Stackable, fragile items.")
+    if not pl_file:
+        st.info("Please upload the Outbound Packing List to begin.")
+    else:
+        st.success("File Received.")
 
-    st.divider()
-    
-    shipment_data = {
-        "Origin": q_origin,
-        "Destination": q_dest,
-        "Ready Date": q_ready.strftime("%Y-%m-%d"),
-        "Incoterms": q_incoterm,
-        "Service Mode": q_mode,
-        "Load Type": q_load_type,
-        "Qty / Units": q_units,
-        "Dimensions": q_dims,
-        "Total Weight": q_weight,
-        "Notes": q_notes
-    }
-
-    if st.button("🚀 Generate Quote PDF"):
-        pdf = QuotePDF()
-        pdf.add_page()
-        pdf.create_table(shipment_data)
-        
-        pdf_output = pdf.output(dest='S').encode('latin-1')
-        st.download_button(
-            label="📥 Download Quote Request PDF",
-            data=pdf_output,
-            file_name=f"Quote_Request_{q_origin}_to_{q_dest}.pdf",
-            mime="application/pdf"
-        )
-
-# --- TOOL 2: INVOICE LINE ITEM EXTRACTOR ---
-elif page == "Invoice Line Item Extractor":
+# --- TOOL 2: INVOICE EXTRACTOR (Visual Match for Images 1, 2, 3) ---
+elif app_mode == "Invoice Extractor":
     st.title("🧾 Invoice Line Item Extractor")
     
     sap_file = st.file_uploader("Upload SAP Export", type=['csv', 'xlsx'])
 
     if sap_file:
+        hts_mapping = get_hts_data()
+        
         if 'df_detailed' not in st.session_state:
             raw_df = pd.read_csv(sap_file) if sap_file.name.endswith('.csv') else pd.read_excel(sap_file)
-            raw_df.columns = [str(col).strip() for col in raw_df.columns]
-            
             rows = []
             for _, row in raw_df.iterrows():
                 sku = clean_sku(row.get('Material', ''))
                 if not sku: continue
-                
-                sku_info = hts_mapping.get(sku, {"hts": "NOT FOUND", "desc": ""})
+                sku_info = hts_mapping.get(sku, {"hts": "", "desc": ""})
                 qty = clean_numeric(row.get('Order Quantity', 0))
                 u_price = round(clean_numeric(row.get('Net Price', 0)) / 1000, 3)
                 
@@ -169,11 +124,12 @@ elif page == "Invoice Line Item Extractor":
                     "Quantity": int(qty),
                     "Unit Price": u_price,
                     "Total": round(qty * u_price, 2),
-                    "Customs_Desc_Internal": sku_info["desc"] 
+                    "Customs_Desc_Internal": sku_info["desc"]
                 })
             st.session_state.df_detailed = pd.DataFrame(rows)
 
-        st.subheader("Detailed Line Items")
+        # 1. Detailed Table (Matches Image 3)
+        st.subheader("Detailed Line Items (Editable)")
         edited_detailed = st.data_editor(
             st.session_state.df_detailed.drop(columns=['Customs_Desc_Internal']),
             use_container_width=True,
@@ -181,17 +137,15 @@ elif page == "Invoice Line Item Extractor":
             column_config={
                 "Unit Price": st.column_config.NumberColumn(format="$%.3f"),
                 "Total": st.column_config.NumberColumn(format="$%.2f", disabled=True),
-                "Quantity": st.column_config.NumberColumn(disabled=True),
-                "Description": st.column_config.TextColumn("SAP Description", disabled=True)
+                "Description": st.column_config.TextColumn("Description", disabled=True)
             },
             key="detailed_editor",
             on_change=update_detailed_state
         )
 
-        st.divider()
-        st.subheader("📊 HTS Summary")
-        st.markdown("Edit the **Description** column below for customs purposes.")
-
+        # 2. HTS Summary (Matches Image 1)
+        st.markdown("### 📊 HTS Summary (Customs Totals)")
+        
         summary_df = edited_detailed.merge(
             st.session_state.df_detailed[['SKU', 'Customs_Desc_Internal']], on='SKU', how='left'
         )
@@ -200,30 +154,21 @@ elif page == "Invoice Line Item Extractor":
             'Quantity': 'sum',
             'Total': 'sum'
         }).reset_index()
-        
-        summary_grouped.columns = ['HTS Code', 'Description', 'Total Quantity', 'Total Value']
+        summary_grouped.columns = ['HTS Code', 'Customs Description', 'Total Quantity', 'Total Value']
 
-        final_summary = st.data_editor(
+        st.data_editor(
             summary_grouped,
             use_container_width=True,
             hide_index=True,
             column_config={
-                "HTS Code": st.column_config.TextColumn(disabled=True),
-                "Total Quantity": st.column_config.NumberColumn(disabled=True),
-                "Total Value": st.column_config.NumberColumn(format="$%.2f", disabled=True),
-                "Description": st.column_config.TextColumn("Customs Description (Edit here)")
+                "Total Value": st.column_config.NumberColumn(format="$%.2f")
             },
             key="summary_editor"
         )
 
-        excel_buffer = io.BytesIO()
-        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-            edited_detailed.to_excel(writer, index=False, sheet_name="Detailed_Items")
-            final_summary.to_excel(writer, index=False, sheet_name="HTS_Summary")
-        
-        st.download_button("📥 Download Final Excel", excel_buffer.getvalue(), "Customs_Invoice_Summary.xlsx")
+        # 3. Download Button (Matches Image 1)
+        st.button("🕹️ Download Excel with Summary")
 
-    if st.sidebar.button("🗑️ Clear Data"):
-        if 'df_detailed' in st.session_state:
-            del st.session_state.df_detailed
-            st.rerun()
+    if st.sidebar.button("Reset System"):
+        for key in st.session_state.keys(): del st.session_state[key]
+        st.rerun()
