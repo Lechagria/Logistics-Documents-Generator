@@ -186,7 +186,7 @@ else:
                     st.code(email_body, language="markdown")
 
    # --- TOOL 2: INVOICE EXTRACTOR (Updated with Weight Logic) ---
-elif st.session_state.active_tool == "Invoice Extractor":
+   elif st.session_state.active_tool == "Invoice Extractor":
     st.title("🧾 Invoice Line Item Extractor")
     
     col1, col2 = st.columns(2)
