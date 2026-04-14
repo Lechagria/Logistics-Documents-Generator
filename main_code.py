@@ -104,22 +104,10 @@ else:
         st.session_state.active_tool = None
         st.rerun()
 
-    # --- TOOL 1: QUOTE PIPELINE (UNTOUCHED) ---
     if st.session_state.active_tool == "Quote Pipeline":
-        st.sidebar.title("Shipment Details")
-        destinations = ["UK - Radial FAO Monat...", "POLAND - Radial Poland...", "AUSTRALIA - FDM...", "MONAT Canada...", "FENIX FWD INC...", "OTHER"]
-        selected_dest = st.sidebar.selectbox("Select Destination", destinations)
-        service = st.sidebar.selectbox("Service", ["40\" REEFER", "40\" DRY", "20\" DRY", "HAZMAT LCL", "LCL Ocean", "LTL Road", "Air Freight", "Courier"])
-        commodity = st.sidebar.text_input("Commodity", value="Finished goods / Haircare / Skincare")
-        cargo_value = st.sidebar.text_input("Value of Cargo", value="USD$ ")
-        incoterms = st.sidebar.selectbox("Incoterms", ["-", "EXW", "FOB", "DDP", "DAP", "CIF"])
-
         st.title("📦 Logistics Quote Pipeline")
         packing_file = st.file_uploader("Upload Outbound Packing List (.xlsx)", type=['xlsx'])
-        if packing_file:
-            st.success("File uploaded. Generate template to proceed.")
 
-    # --- TOOL 2: INVOICE EXTRACTOR (FIXED PO READING & UNIT PRICE) ---
     elif st.session_state.active_tool == "Invoice Extractor":
         st.title("🧾 Invoice Line Item Extractor")
         
@@ -130,16 +118,13 @@ else:
         if sap_file and pl_file:
             hts_mapping = get_hts_data()
             
-            # --- Packing List processing (Multi-PO Fix) ---
+            # --- Packing List processing (Multi-PO Scan) ---
             raw_pl = pd.read_excel(pl_file, header=None) if pl_file.name.endswith('.xlsx') else pd.read_csv(pl_file, header=None)
-            
             sku_weight_map = {}
             current_cols = None
 
             for i, row in raw_pl.iterrows():
                 row_vals = [str(x).strip() for x in row.values]
-                
-                # Identify Header Row (Scans entire file to handle multiple tables)
                 if "SKU" in row_vals or "Material" in row_vals:
                     current_cols = [v.replace('\n', ' ').strip() for v in row_vals]
                     continue
@@ -147,12 +132,10 @@ else:
                 if current_cols:
                     row_dict = dict(zip(current_cols, row.values))
                     sku = clean_sku(row_dict.get('SKU') or row_dict.get('Material'))
-                    
                     if sku and sku != "nan":
                         # Updated Weight Logic: Using 'Total Weight / Box'
                         weight_lb = clean_numeric(row_dict.get('Total Weight / Box') or row_dict.get('Tot. Weight / Bxs'))
                         units = clean_numeric(row_dict.get('Total Units'))
-                        
                         if units > 0:
                             unit_kg = (weight_lb / units) * 0.453592
                             sku_weight_map[sku] = unit_kg
@@ -169,9 +152,8 @@ else:
                     
                     sku_info = hts_mapping.get(sku, {"hts": "TBD", "desc": "Unknown"})
                     qty = clean_numeric(row.get('Order Quantity', 0))
-                    
-                    # Reverted to Previous Version Calculation: Net Price / 1000
-                    u_price = round(clean_numeric(row.get('Net Price', 0)) / 1000, 3)
+                    # Previous calculation: Pull direct price from SAP
+                    u_price = round(clean_numeric(row.get('Net Price', 0)), 3)
                     u_weight = sku_weight_map.get(sku, 0.0)
                     
                     rows.append({
@@ -210,7 +192,7 @@ else:
             }).reset_index()
             
             summary_grouped.columns = ['HTS Code', 'Customs Description', 'Total Qty', 'Total Value', 'Total Weight (KG)']
-            st.table(summary_grouped)
+            st.table(summary_grouped.style.format({"Total Value": "${:,.2f}", "Total Weight (KG)": "{:,.2f} kg"}))
 
             excel_buf = io.BytesIO()
             with pd.ExcelWriter(excel_buf, engine='openpyxl') as writer:
