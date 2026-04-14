@@ -249,7 +249,7 @@ else:
                     })
                 st.session_state.df_detailed = pd.DataFrame(rows)
 
-            st.subheader("Detailed Line Items (Editable)")
+            st.subheader("Commercial Invoice Data (Editable)")
             edited_detailed = st.data_editor(
                 st.session_state.df_detailed.drop(columns=['Customs_Desc_Internal', 'Unit_Weight_KG']),
                 use_container_width=True, hide_index=True,
