@@ -244,6 +244,7 @@ else:
                         "Origin": "USA" if sku.startswith('600') else "CHINA" if sku.startswith('300') else "",
                         "Description": str(row.get('Short Text', '')).strip(),
                         "Quantity": int(qty), "Unit Price": u_price, "Total": round(qty * u_price, 2),
+                        "Unit_Weight_KG": u_weight, "Total Weight (KG)": round(qty * u_weight, 2),
                         "Customs_Desc_Internal": sku_info["desc"]
                     })
                 st.session_state.df_detailed = pd.DataFrame(rows)
