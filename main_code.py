@@ -62,7 +62,28 @@ def update_detailed_state():
             st.session_state.df_detailed.at[row_idx, "Total"] = round(q * p, 2)
 
 # ==========================================
-# 2. MAIN APP
+# 2. PDF GENERATOR (FOR QUOTE REQUEST)
+# ==========================================
+class QuotePDF(FPDF):
+    def header(self):
+        self.set_font('Arial', 'B', 16)
+        self.cell(0, 15, 'QUOTE REQUEST - FREIGHT', border=0, ln=1, align='C')
+        self.ln(5)
+
+    def create_table(self, data_dict):
+        self.set_fill_color(240, 240, 240)
+        self.set_font('Arial', 'B', 10)
+        self.cell(60, 10, ' CATEGORY', border=1, fill=True)
+        self.cell(130, 10, ' SHIPMENT DETAILS', border=1, ln=1, fill=True)
+        self.set_font('Arial', '', 10)
+        for key, value in data_dict.items():
+            self.set_font('Arial', 'B', 10)
+            self.cell(60, 9, f" {key}", border=1)
+            self.set_font('Arial', '', 10)
+            self.cell(130, 9, f" {value}", border=1, ln=1)
+
+# ==========================================
+# 3. MAIN APP
 # ==========================================
 st.set_page_config(page_title="Logistics Portal", layout="wide")
 st.sidebar.title("📑 Logistics Tools")
@@ -70,13 +91,64 @@ page = st.sidebar.selectbox("Select Tool", ["Quote Request Generator", "Invoice 
 
 hts_mapping = get_hts_data()
 
-if page == "Invoice Line Item Extractor":
+# --- TOOL 1: QUOTE REQUEST GENERATOR ---
+if page == "Quote Request Generator":
+    st.title("📦 Quote Request Pipeline")
+    
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.subheader("1. Shipment Details")
+        q_origin = st.text_input("Origin (City/Port)", "Foshan, China")
+        q_dest = st.text_input("Destination", "Naranja, FL 33032")
+        q_mode = st.selectbox("Mode", ["Sea Freight (LCL)", "Sea Freight (FCL)", "Air Freight", "Trucking"])
+        q_incoterm = st.selectbox("Incoterm", ["EXW", "FOB", "CIF", "DDP"])
+        q_ready = st.date_input("Ready Date", datetime.date.today())
+        q_notes = st.text_area("Special Instructions", "N/A")
+
+    with col2:
+        st.subheader("2. Upload Packing List")
+        pl_file = st.file_uploader("Upload Packing List (CSV/Excel)", type=['csv', 'xlsx'], key="pl_upload")
+        
+        if pl_file:
+            pl_df = pd.read_csv(pl_file) if pl_file.name.endswith('.csv') else pd.read_excel(pl_file)
+            st.success("File uploaded successfully!")
+            
+            # Simple aggregation logic for the quote
+            total_pkgs = len(pl_df)
+            total_weight = pl_df.iloc[:, -1].sum() if not pl_df.empty else 0 # Assuming last col is weight
+            
+            shipment_data = {
+                "Origin": q_origin,
+                "Destination": q_dest,
+                "Service Mode": q_mode,
+                "Incoterms": q_incoterm,
+                "Ready Date": q_ready.strftime("%Y-%m-%d"),
+                "Total Packages": f"{total_pkgs} Cartons",
+                "Est. Total Weight": f"{total_weight} KG",
+                "Notes": q_notes
+            }
+
+            if st.button("Generate Quote PDF"):
+                pdf = QuotePDF()
+                pdf.add_page()
+                pdf.create_table(shipment_data)
+                
+                pdf_output = pdf.output(dest='S').encode('latin-1')
+                st.download_button(
+                    label="📥 Download Quote Request",
+                    data=pdf_output,
+                    file_name=f"Quote_Request_{q_origin}.pdf",
+                    mime="application/pdf"
+                )
+
+# --- TOOL 2: INVOICE LINE ITEM EXTRACTOR ---
+elif page == "Invoice Line Item Extractor":
     st.title("🧾 Invoice Line Item Extractor")
     
     sap_file = st.file_uploader("Upload SAP Export", type=['csv', 'xlsx'])
 
     if sap_file:
-        # Load data into session state
         if 'df_detailed' not in st.session_state:
             raw_df = pd.read_csv(sap_file) if sap_file.name.endswith('.csv') else pd.read_excel(sap_file)
             raw_df.columns = [str(col).strip() for col in raw_df.columns]
@@ -98,11 +170,10 @@ if page == "Invoice Line Item Extractor":
                     "Quantity": int(qty),
                     "Unit Price": u_price,
                     "Total": round(qty * u_price, 2),
-                    "Customs_Desc_Internal": sku_info["desc"] # Hidden source for summary
+                    "Customs_Desc_Internal": sku_info["desc"] 
                 })
             st.session_state.df_detailed = pd.DataFrame(rows)
 
-        # --- 1. DETAILED TABLE (Manual Edits for HTS, Origin, Price) ---
         st.subheader("Detailed Line Items")
         edited_detailed = st.data_editor(
             st.session_state.df_detailed.drop(columns=['Customs_Desc_Internal']),
@@ -118,13 +189,10 @@ if page == "Invoice Line Item Extractor":
             on_change=update_detailed_state
         )
 
-        # --- 2. HTS SUMMARY (Editable Descriptions) ---
         st.divider()
         st.subheader("📊 HTS Summary")
         st.markdown("Edit the **Description** column below for customs purposes.")
 
-        # Prepare summary data from current state
-        # We merge back the hidden internal description to group correctly
         summary_df = edited_detailed.merge(
             st.session_state.df_detailed[['SKU', 'Customs_Desc_Internal']], on='SKU', how='left'
         )
@@ -136,7 +204,6 @@ if page == "Invoice Line Item Extractor":
         
         summary_grouped.columns = ['HTS Code', 'Description', 'Total Quantity', 'Total Value']
 
-        # Make the summary description editable
         final_summary = st.data_editor(
             summary_grouped,
             use_container_width=True,
@@ -150,7 +217,6 @@ if page == "Invoice Line Item Extractor":
             key="summary_editor"
         )
 
-        # --- 3. DOWNLOAD ---
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
             edited_detailed.to_excel(writer, index=False, sheet_name="Detailed_Items")
@@ -162,7 +228,3 @@ if page == "Invoice Line Item Extractor":
         if 'df_detailed' in st.session_state:
             del st.session_state.df_detailed
             st.rerun()
-
-elif page == "Quote Request Generator":
-    st.title("📦 Quote Request Pipeline")
-    st.info("Tool is ready for upload.")
