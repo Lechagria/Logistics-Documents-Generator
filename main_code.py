@@ -104,7 +104,7 @@ else:
         st.session_state.active_tool = None
         st.rerun()
 
-    # --- TOOL 1: QUOTE PIPELINE (UNMODIFIED) ---
+    # --- TOOL 1: QUOTE PIPELINE (UNTOUCHED) ---
     if st.session_state.active_tool == "Quote Pipeline":
         st.sidebar.title("Shipment Details")
         destinations = ["UK - Radial FAO Monat...", "POLAND - Radial Poland...", "AUSTRALIA - FDM...", "MONAT Canada...", "FENIX FWD INC...", "OTHER"]
@@ -119,7 +119,7 @@ else:
         if packing_file:
             st.success("File uploaded. Generate template to proceed.")
 
-    # --- TOOL 2: INVOICE EXTRACTOR (FIXED FOR MULTIPLE POs) ---
+    # --- TOOL 2: INVOICE EXTRACTOR (FIXED PO READING & UNIT PRICE) ---
     elif st.session_state.active_tool == "Invoice Extractor":
         st.title("🧾 Invoice Line Item Extractor")
         
@@ -130,39 +130,34 @@ else:
         if sap_file and pl_file:
             hts_mapping = get_hts_data()
             
-            # --- Robust Packing List Multi-PO Processing ---
+            # --- Packing List processing (Multi-PO Fix) ---
             raw_pl = pd.read_excel(pl_file, header=None) if pl_file.name.endswith('.xlsx') else pd.read_csv(pl_file, header=None)
             
             sku_weight_map = {}
-            last_po = ""
             current_cols = None
 
             for i, row in raw_pl.iterrows():
                 row_vals = [str(x).strip() for x in row.values]
                 
-                # Identify Header Row (works for both tables)
+                # Identify Header Row (Scans entire file to handle multiple tables)
                 if "SKU" in row_vals or "Material" in row_vals:
-                    current_cols = row_vals
+                    current_cols = [v.replace('\n', ' ').strip() for v in row_vals]
                     continue
                 
                 if current_cols:
                     row_dict = dict(zip(current_cols, row.values))
                     sku = clean_sku(row_dict.get('SKU') or row_dict.get('Material'))
-                    po = str(row_dict.get('P.O.') or row_dict.get('Purchasing Document') or "").strip()
-                    
-                    # Track PO forward-filling
-                    if po and po != "nan": last_po = po
                     
                     if sku and sku != "nan":
-                        # Weight Logic: Get LB and convert to KG
-                        weight_lb = clean_numeric(row_dict.get('Weight / Box') or row_dict.get('Tot. Weight / Bxs'))
+                        # Updated Weight Logic: Using 'Total Weight / Box'
+                        weight_lb = clean_numeric(row_dict.get('Total Weight / Box') or row_dict.get('Tot. Weight / Bxs'))
                         units = clean_numeric(row_dict.get('Total Units'))
                         
                         if units > 0:
                             unit_kg = (weight_lb / units) * 0.453592
                             sku_weight_map[sku] = unit_kg
 
-            # --- SAP Processing ---
+            # --- SAP Processing (Reverted Price Logic) ---
             if 'df_detailed' not in st.session_state:
                 raw_sap = pd.read_csv(sap_file) if sap_file.name.endswith('.csv') else pd.read_excel(sap_file)
                 raw_sap.columns = [str(col).strip() for col in raw_sap.columns]
@@ -174,10 +169,9 @@ else:
                     
                     sku_info = hts_mapping.get(sku, {"hts": "TBD", "desc": "Unknown"})
                     qty = clean_numeric(row.get('Order Quantity', 0))
-                    net_price = clean_numeric(row.get('Net Price', 0))
                     
-                    # Logic: Determine Unit Price
-                    u_price = round(net_price / qty, 3) if qty > 0 else 0.0
+                    # Reverted to Previous Version Calculation: Net Price / 1000
+                    u_price = round(clean_numeric(row.get('Net Price', 0)) / 1000, 3)
                     u_weight = sku_weight_map.get(sku, 0.0)
                     
                     rows.append({
