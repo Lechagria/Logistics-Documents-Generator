@@ -56,7 +56,7 @@ def update_detailed_state():
         for row_idx, changes in edits.items():
             for col_name, new_val in changes.items():
                 st.session_state.df_detailed.at[row_idx, col_name] = new_val
-            # Update Total
+            # Update Total automatically
             q = st.session_state.df_detailed.at[row_idx, "Quantity"]
             p = st.session_state.df_detailed.at[row_idx, "Unit Price"]
             st.session_state.df_detailed.at[row_idx, "Total"] = round(q * p, 2)
@@ -121,9 +121,10 @@ if page == "Invoice Line Item Extractor":
         # --- 2. HTS SUMMARY (Editable Descriptions) ---
         st.divider()
         st.subheader("📊 HTS Summary")
-        st.info("You can manually edit the **Description** in the summary table below.")
+        st.markdown("Edit the **Description** column below for customs purposes.")
 
         # Prepare summary data from current state
+        # We merge back the hidden internal description to group correctly
         summary_df = edited_detailed.merge(
             st.session_state.df_detailed[['SKU', 'Customs_Desc_Internal']], on='SKU', how='left'
         )
@@ -132,9 +133,10 @@ if page == "Invoice Line Item Extractor":
             'Quantity': 'sum',
             'Total': 'sum'
         }).reset_index()
+        
         summary_grouped.columns = ['HTS Code', 'Description', 'Total Quantity', 'Total Value']
 
-        # Make the summary itself editable!
+        # Make the summary description editable
         final_summary = st.data_editor(
             summary_grouped,
             use_container_width=True,
