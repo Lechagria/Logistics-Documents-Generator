@@ -185,47 +185,98 @@ else:
                     st.subheader("2. Email Draft")
                     st.code(email_body, language="markdown")
 
-    # --- TOOL 2: INVOICE EXTRACTOR ---
-    elif st.session_state.active_tool == "Invoice Extractor":
-        st.title("🧾 Invoice Line Item Extractor")
-        sap_file = st.file_uploader("Upload SAP Export", type=['csv', 'xlsx'])
+   # --- TOOL 2: INVOICE EXTRACTOR (Updated with Weight Logic) ---
+elif st.session_state.active_tool == "Invoice Extractor":
+    st.title("🧾 Invoice Line Item Extractor")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        sap_file = st.file_uploader("1. Upload SAP Export", type=['csv', 'xlsx'])
+    with col2:
+        pl_file = st.file_uploader("2. Upload Packing List (for Weights)", type=['csv', 'xlsx'])
 
-        if sap_file:
-            hts_mapping = get_hts_data()
-            if 'df_detailed' not in st.session_state:
-                raw_df = pd.read_csv(sap_file) if sap_file.name.endswith('.csv') else pd.read_excel(sap_file)
-                raw_df.columns = [str(col).strip() for col in raw_df.columns]
-                rows = []
-                for _, row in raw_df.iterrows():
-                    sku = clean_sku(row.get('Material', ''))
-                    if not sku: continue
-                    sku_info = hts_mapping.get(sku, {"hts": "", "desc": ""})
-                    qty = clean_numeric(row.get('Order Quantity', 0))
-                    u_price = round(clean_numeric(row.get('Net Price', 0)) / 1000, 3)
-                    rows.append({
-                        "SKU": sku, "HTS Code": sku_info["hts"], "Origin": "USA" if sku.startswith('600') else "CHINA" if sku.startswith('300') else "",
-                        "Description": str(row.get('Short Text', '')).strip(), "Quantity": int(qty), "Unit Price": u_price,
-                        "Total": round(qty * u_price, 2), "Customs_Desc_Internal": sku_info["desc"]
-                    })
-                st.session_state.df_detailed = pd.DataFrame(rows)
+    if sap_file and pl_file:
+        hts_mapping = get_hts_data()
+        
+        # --- PROCESS PACKING LIST FOR WEIGHTS (The "XLOOKUP" Logic) ---
+        # Assuming SKU is in one column and weight data in others
+        pl_df = pd.read_excel(pl_file) if pl_file.name.endswith('.xlsx') else pd.read_csv(pl_file)
+        pl_df.columns = [str(c).strip() for c in pl_df.columns]
+        
+        # Create a weight mapping: {SKU: Weight_Per_Unit_KG}
+        weight_map = {}
+        for _, row in pl_df.iterrows():
+            sku = clean_sku(row.get('Material') or row.get('SKU'))
+            # Your logic: Tot. Weight (Col N) / Bxs 
+            # Then convert LBS to KG (* 0.453592)
+            tot_w = clean_numeric(row.get('Tot. Weight')) 
+            bxs = clean_numeric(row.get('Bxs'))
+            
+            if bxs > 0:
+                weight_per_unit_lbs = tot_w / bxs
+                weight_per_unit_kg = weight_per_unit_lbs * 0.453592
+                weight_map[sku] = weight_per_unit_kg
 
-            st.subheader("Detailed Line Items (Editable)")
-            edited_detailed = st.data_editor(
-                st.session_state.df_detailed.drop(columns=['Customs_Desc_Internal']),
-                use_container_width=True, hide_index=True,
-                column_config={"Unit Price": st.column_config.NumberColumn(format="$%.3f"), "Total": st.column_config.NumberColumn(format="$%.2f", disabled=True)},
-                key="detailed_editor", on_change=update_detailed_state
-            )
+        if 'df_detailed' not in st.session_state:
+            raw_df = pd.read_csv(sap_file) if sap_file.name.endswith('.csv') else pd.read_excel(sap_file)
+            raw_df.columns = [str(col).strip() for col in raw_df.columns]
+            rows = []
+            for _, row in raw_df.iterrows():
+                sku = clean_sku(row.get('Material', ''))
+                if not sku: continue
+                
+                sku_info = hts_mapping.get(sku, {"hts": "", "desc": ""})
+                qty = clean_numeric(row.get('Order Quantity', 0))
+                u_price = round(clean_numeric(row.get('Net Price', 0)) / 1000, 3)
+                
+                # Grab weight from our new map
+                unit_kg = weight_map.get(sku, 0.0)
+                
+                rows.append({
+                    "SKU": sku, 
+                    "HTS Code": sku_info["hts"], 
+                    "Origin": "USA" if sku.startswith('600') else "CHINA" if sku.startswith('300') else "",
+                    "Description": str(row.get('Short Text', '')).strip(), 
+                    "Quantity": int(qty), 
+                    "Unit Price": u_price,
+                    "Total": round(qty * u_price, 2), 
+                    "Unit_Weight_KG": unit_kg, # Hidden helper
+                    "Total_Weight_KG": round(qty * unit_kg, 2),
+                    "Customs_Desc_Internal": sku_info["desc"]
+                })
+            st.session_state.df_detailed = pd.DataFrame(rows)
 
-            st.markdown("### 📊 HTS Summary (Customs Totals)")
-            summary_df = edited_detailed.merge(st.session_state.df_detailed[['SKU', 'Customs_Desc_Internal']], on='SKU', how='left')
-            summary_grouped = summary_df.groupby(['HTS Code', 'Customs_Desc_Internal']).agg({'Quantity': 'sum', 'Total': 'sum'}).reset_index()
-            summary_grouped.columns = ['HTS Code', 'Customs Description', 'Total Quantity', 'Total Value']
+        st.subheader("Detailed Line Items (Editable)")
+        # Displaying with Weight
+        edited_detailed = st.data_editor(
+            st.session_state.df_detailed.drop(columns=['Customs_Desc_Internal', 'Unit_Weight_KG']),
+            use_container_width=True, hide_index=True,
+            column_config={
+                "Unit Price": st.column_config.NumberColumn(format="$%.3f"), 
+                "Total": st.column_config.NumberColumn(format="$%.2f", disabled=True),
+                "Total_Weight_KG": st.column_config.NumberColumn(format="%.2f KG")
+            },
+            key="detailed_editor", on_change=update_detailed_state
+        )
 
-            final_summary = st.data_editor(
-                summary_grouped, use_container_width=True, hide_index=True,
-                column_config={"Total Value": st.column_config.NumberColumn(format="$%.2f")},
-                key="summary_editor"
-            )
+        st.markdown("### 📊 HTS Summary (Customs Totals with Weights)")
+        # Aggregate by HTS including Weight
+        summary_df = edited_detailed.merge(st.session_state.df_detailed[['SKU', 'Customs_Desc_Internal']], on='SKU', how='left')
+        summary_grouped = summary_df.groupby(['HTS Code', 'Customs_Desc_Internal']).agg({
+            'Quantity': 'sum', 
+            'Total': 'sum',
+            'Total_Weight_KG': 'sum'
+        }).reset_index()
+        
+        summary_grouped.columns = ['HTS Code', 'Customs Description', 'Total Qty', 'Total Value', 'Total Weight (KG)']
 
-            st.button("🕹️ Download Excel with Summary")
+        final_summary = st.data_editor(
+            summary_grouped, use_container_width=True, hide_index=True,
+            column_config={
+                "Total Value": st.column_config.NumberColumn(format="$%.2f"),
+                "Total Weight (KG)": st.column_config.NumberColumn(format="%.2f KG")
+            },
+            key="summary_editor"
+        )
+
+        st.button("🕹️ Download Excel with Weight Summary")
