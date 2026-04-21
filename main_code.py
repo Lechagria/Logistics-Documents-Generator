@@ -259,7 +259,7 @@ else:
                 key="detailed_editor", on_change=update_detailed_state
             )
 
-            st.markdown("### 📊 HTS Summary (SLI Weight Breakdown)")
+            st.markdown("### HTS Summary (SLI Weight Breakdown)")
             summary_grouped = edited_detailed.merge(
                 st.session_state.df_detailed[['SKU', 'Customs_Desc_Internal']], on='SKU', how='left'
             ).groupby(['Customs_Desc_Internal', 'HTS Code']).agg({
