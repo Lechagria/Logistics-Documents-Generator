@@ -259,19 +259,22 @@ else:
                 key="detailed_editor", on_change=update_detailed_state
             )
 
-            st.markdown("### HTS Summary (SLI Weight Breakdown)")
+            st.markdown("### 📊 HTS Summary (SLI Weight Breakdown)")
             summary_grouped = edited_detailed.merge(
                 st.session_state.df_detailed[['SKU', 'Customs_Desc_Internal']], on='SKU', how='left'
-            ).groupby(['HTS Code', 'Customs_Desc_Internal']).agg({
-                'Quantity': 'sum', 'Total': 'sum', 'Total Weight (KG)': 'sum'
+            ).groupby(['Customs_Desc_Internal', 'HTS Code']).agg({
+                'Quantity': 'sum', 'Total Weight (KG)': 'sum', 'Total': 'sum'
             }).reset_index()
             
-            summary_grouped.columns = ['HTS Code', 'Customs Description', 'Total Qty', 'Total Value', 'Total Weight (KG)']
+            # Renaming columns to match the requested display order
+            summary_grouped.columns = ['Customs Description', 'HTS Code', 'Total Qty', 'Total Weight (KG)', 'Total Value']
 
             st.data_editor(
                 summary_grouped, use_container_width=True, hide_index=True,
-                column_config={"Total Value": st.column_config.NumberColumn(format="$%.2f"),
-                               "Total Weight (KG)": st.column_config.NumberColumn(format="%.2f kg")},
+                column_config={
+                    "Total Value": st.column_config.NumberColumn(format="$%.2f"),
+                    "Total Weight (KG)": st.column_config.NumberColumn(format="%.2f kg")
+                },
                 key="summary_editor"
             )
 
