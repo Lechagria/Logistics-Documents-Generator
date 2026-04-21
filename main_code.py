@@ -266,7 +266,7 @@ else:
                 'Quantity': 'sum', 'Total': 'sum', 'Total Weight (KG)': 'sum'
             }).reset_index()
             
-            summary_grouped.columns = ['Customs Description','HTS Code', 'Total Qty', 'Total Weight (KG)', 'Total Value',]
+            summary_grouped.columns = ['HTS Code', 'Customs Description', 'Total Qty', 'Total Weight (KG)', 'Total Value']
 
             st.data_editor(
                 summary_grouped, use_container_width=True, hide_index=True,
