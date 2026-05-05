@@ -177,7 +177,7 @@ else:
                     df_output.to_excel(writer, index=False, header=False)
 
                 dim_string = "".join([f"\n- • Dimensions: {d}" for d in formatted_dims])
-                email_body = f"Hi Team,\n\nHope you are having a great week! \n\nPlease find the details below for a new {service} shipment quote — please include insurance cost:\n\n- • Destination: {destination}\n- • Service: {service}\n- • Total Units: {units_final:,}\n- • Pallets: {pallets_final}{dim_string}\n- • Total Weight: {lbs_final:,.2f} LBS | {kgs_final:,.2f} KGS\n- • Commodity: {commodity}\n- • Value: {cargo_value}\n- • Incoterms: {incoterms}\n\nThank you for your help."
+                email_body = f"Hi Team,\n\nHope you are having a great week! \n\nPlease find the details below for a new {service} shipment quote — please include insurance cost:\n\n-• Destination: {destination}\n-• Service: {service}\n-• Total Units: {units_final:,}\n-• Pallets: {pallets_final}{dim_string}\n-• Total Weight: {lbs_final:,.2f} LBS | {kgs_final:,.2f} KGS\n-• Commodity: {commodity}\n-• Value: {cargo_value}\n-• Incoterms: {incoterms}\n\nThank you for your help."
 
                 st.divider()
                 col1, col2 = st.columns(2)
