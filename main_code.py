@@ -5,6 +5,7 @@ import io
 import datetime
 import os
 import re
+from openpyxl import load_workbook
 
 # ==========================================
 # 1. PAGE CONFIG & THEME
@@ -77,6 +78,71 @@ def update_detailed_state():
             st.session_state.df_detailed.at[row_idx, "Total"] = round(q * p, 2)
             st.session_state.df_detailed.at[row_idx, "Total Weight (KG)"] = round(q * uw, 2)
 
+# ── Destination → template filename mapping ────────────────────────────────
+INVOICE_DESTINATIONS = {
+    "🇦🇺 Australia / APAC": "Commercial_Invoice_APAC.xlsx",
+    "🇪🇺 Europe (EU)":       "Commercial_Invoice_EU.xlsx",
+    "🇬🇧 United Kingdom":    "Commercial_Invoice_UK.xlsx",
+    "🇨🇦 Canada":            "Commercial_Invoice_CAN.xlsx",
+    "🇲🇽 Mexico":            "Commercial_Invoice_MEX.xlsx",
+}
+
+# ── Row layout constants (confirmed across all templates) ──────────────────
+CI_DATA_START   = 17   # first line-item row
+CI_DATA_END     = 54   # last line-item row  (38 rows total)
+CI_MAX_ROWS     = CI_DATA_END - CI_DATA_START + 1   # 38
+CI_SUBTOTAL_ROW = 55
+CI_TOTAL_ROW    = 58
+
+def fill_commercial_invoice_template(df_detailed, template_filename):
+    """
+    Loads the selected destination template, fills it with df_detailed data.
+    Returns (bytes, None) on success or (None, error_string) on failure.
+    Hard-stops if row count exceeds 38 — caller must handle the warning.
+    """
+    template_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), template_filename)
+
+    if not os.path.exists(template_path):
+        return None, (
+            f"Template file **'{template_filename}'** not found next to main_code.py. "
+            "Make sure it is committed to your repo."
+        )
+
+    try:
+        wb = load_workbook(template_path)
+    except Exception as e:
+        return None, f"Could not open template '{template_filename}': {e}"
+
+    ws = wb.active
+
+    # ── Header fields ──────────────────────────────────────────────────────
+    po_list = ", ".join(str(p) for p in df_detailed['PO#'].dropna().unique())
+    ws['F4'] = po_list
+    ws['F5'] = datetime.date.today().strftime("%m/%d/%Y")
+
+    # ── Write line items ───────────────────────────────────────────────────
+    items = df_detailed[['SKU', 'HTS Code', 'Origin', 'Description',
+                          'Quantity', 'Unit Price']].values.tolist()
+
+    for i, item in enumerate(items):
+        r = CI_DATA_START + i
+        ws.cell(row=r, column=1).value = str(item[0])              # SKU
+        ws.cell(row=r, column=2).value = str(item[1])              # HTS Code
+        ws.cell(row=r, column=3).value = str(item[2])              # Origin
+        ws.cell(row=r, column=4).value = str(item[3])              # Description
+        ws.cell(row=r, column=5).value = int(item[4])              # Quantity
+        ws.cell(row=r, column=6).value = round(float(item[5]), 3)  # Unit Price
+        ws.cell(row=r, column=7).value = f'=F{r}*E{r}'            # Total (formula)
+
+    # ── Subtotal SUM covers only populated rows ────────────────────────────
+    last_data_row = CI_DATA_START + len(items) - 1
+    ws[f'E{CI_SUBTOTAL_ROW}'] = f'=SUM(E{CI_DATA_START}:E{last_data_row})'
+    ws[f'G{CI_SUBTOTAL_ROW}'] = f'=SUM(G{CI_DATA_START}:G{last_data_row})'
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue(), None
+
 # ==========================================
 # 3. DASHBOARD / TOOL SELECTION (CENTER)
 # ==========================================
@@ -104,7 +170,8 @@ if st.session_state.active_tool is None:
 # ==========================================
 else:
     if st.sidebar.button("⬅️ Back to Portal"):
-        if 'df_detailed' in st.session_state: del st.session_state.df_detailed
+        for key in ['df_detailed', 'ci_filled_bytes']:
+            if key in st.session_state: del st.session_state[key]
         st.session_state.active_tool = None
         st.rerun()
 
@@ -176,8 +243,8 @@ else:
                 with pd.ExcelWriter(buf, engine='openpyxl') as writer:
                     df_output.to_excel(writer, index=False, header=False)
 
-                dim_string = "".join([f"\n-• Dimensions: {d}" for d in formatted_dims])
-                email_body = f"Hi Team,\n\nHope you are having a great week! \n\nPlease find the details below for a new {service} shipment quote — please include insurance cost:\n\n-• Destination: {destination}\n-• Service: {service}\n-• Total Units: {units_final:,}\n-• Pallets: {pallets_final}{dim_string}\n-• Total Weight: {lbs_final:,.2f} LBS | {kgs_final:,.2f} KGS\n-• Commodity: {commodity}\n-• Value: {cargo_value}\n-• Incoterms: {incoterms}\n\nThank you for your help."
+                dim_string = "".join([f"\n- • Dimensions: {d}" for d in formatted_dims])
+                email_body = f"Hi Team,\n\nHope you are having a great week! \n\nPlease find the details below for a new {service} shipment quote — please include insurance cost:\n\n- • Destination: {destination}\n- • Service: {service}\n- • Total Units: {units_final:,}\n- • Pallets: {pallets_final}{dim_string}\n- • Total Weight: {lbs_final:,.2f} LBS | {kgs_final:,.2f} KGS\n- • Commodity: {commodity}\n- • Value: {cargo_value}\n- • Incoterms: {incoterms}\n\nThank you for your help."
 
                 st.divider()
                 col1, col2 = st.columns(2)
@@ -189,7 +256,7 @@ else:
                     st.subheader("2. Email Draft")
                     st.code(email_body, language="markdown")
 
-    # --- TOOL 2: INVOICE EXTRACTOR (FIXED FOR MULTI-PO) ---
+    # --- TOOL 2: INVOICE EXTRACTOR ---
     elif st.session_state.active_tool == "Invoice Extractor":
         st.title("🧾 Data Extractor")
         
@@ -207,7 +274,6 @@ else:
 
             for i, row in temp_pl.iterrows():
                 row_vals = [str(x).strip() for x in row.values]
-                # Identify header row anywhere in the file
                 if any(x in str(row_vals).lower() for x in ["sku", "material"]):
                     current_cols = [v.replace('\n', ' ').strip() for v in row_vals]
                     continue
@@ -221,7 +287,7 @@ else:
                         if t_units > 0:
                             weight_map[sku] = (tw_box / t_units) * 0.453592
 
-            # --- SAP Processing (Original Price Logic) ---
+            # --- SAP Processing ---
             if 'df_detailed' not in st.session_state:
                 raw_df = pd.read_csv(sap_file) if sap_file.name.endswith('.csv') else pd.read_excel(sap_file)
                 raw_df.columns = [str(col).strip() for col in raw_df.columns]
@@ -233,8 +299,6 @@ else:
                     
                     sku_info = hts_mapping.get(sku, {"hts": "", "desc": ""})
                     qty = clean_numeric(row.get('Order Quantity', 0))
-                    
-                    # Original logic as per your request
                     u_price = round(clean_numeric(row.get('Net Price', 0)) / 1000, 2)
                     u_weight = weight_map.get(sku, 0.0)
                     
@@ -266,7 +330,6 @@ else:
                 'Quantity': 'sum', 'Total Weight (KG)': 'sum', 'Total': 'sum'
             }).reset_index()
             
-            # Renaming columns to match the requested display order
             summary_grouped.columns = ['Customs Description', 'HTS Code', 'Total Qty', 'Total Weight (KG)', 'Total Value']
 
             st.data_editor(
@@ -278,8 +341,69 @@ else:
                 key="summary_editor"
             )
 
-            excel_buf = io.BytesIO()
-            with pd.ExcelWriter(excel_buf, engine='openpyxl') as writer:
-                edited_detailed.to_excel(writer, index=False, sheet_name="Details")
-                summary_grouped.to_excel(writer, index=False, sheet_name="Summary")
-            st.download_button("📥 Download SLI Excel", excel_buf.getvalue(), "SLI_Invoice.xlsx")
+            # ── Export buttons ─────────────────────────────────────────────────
+            st.divider()
+            col_dl1, col_dl2 = st.columns(2)
+
+            # Left column: existing SLI Excel download
+            with col_dl1:
+                st.subheader("📊 SLI Export")
+                excel_buf = io.BytesIO()
+                with pd.ExcelWriter(excel_buf, engine='openpyxl') as writer:
+                    edited_detailed.to_excel(writer, index=False, sheet_name="Details")
+                    summary_grouped.to_excel(writer, index=False, sheet_name="Summary")
+                st.download_button(
+                    "📥 Download SLI Excel",
+                    excel_buf.getvalue(),
+                    "SLI_Invoice.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+            # Right column: Commercial Invoice filler
+            with col_dl2:
+                st.subheader("📄 Commercial Invoice")
+
+                selected_dest = st.selectbox(
+                    "Select Destination",
+                    options=list(INVOICE_DESTINATIONS.keys()),
+                    key="ci_destination"
+                )
+                template_filename = INVOICE_DESTINATIONS[selected_dest]
+
+                row_count = len(st.session_state.df_detailed)
+
+                if row_count > CI_MAX_ROWS:
+                    st.warning(
+                        f"⚠️ This shipment has **{row_count} SKUs**, which exceeds the "
+                        f"**{CI_MAX_ROWS}-row** capacity of the template. "
+                        "Please fill this invoice manually."
+                    )
+                else:
+                    if st.button("✍️ Fill Commercial Invoice Template"):
+                        if 'ci_filled_bytes' in st.session_state:
+                            del st.session_state.ci_filled_bytes
+
+                        ci_bytes, err = fill_commercial_invoice_template(
+                            st.session_state.df_detailed, template_filename
+                        )
+
+                        if err:
+                            st.error(f"❌ {err}")
+                        else:
+                            st.session_state.ci_filled_bytes = ci_bytes
+                            st.session_state.ci_dest_label = selected_dest
+                            st.success("✅ Invoice filled! Click below to download.")
+
+                    # Persistent download button — survives reruns
+                    if 'ci_filled_bytes' in st.session_state:
+                        po_str = "_".join(
+                            str(p) for p in st.session_state.df_detailed['PO#'].dropna().unique()
+                        )
+                        dest_tag = template_filename.replace("Commercial_Invoice_", "").replace(".xlsx", "")
+                        filename = f"Commercial_Invoice_{dest_tag}_{po_str}_{datetime.date.today().strftime('%Y%m%d')}.xlsx"
+                        st.download_button(
+                            "📥 Download Commercial Invoice",
+                            data=st.session_state.ci_filled_bytes,
+                            file_name=filename,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
