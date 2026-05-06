@@ -143,6 +143,62 @@ def fill_commercial_invoice_template(df_detailed, template_filename):
     wb.save(buf)
     return buf.getvalue(), None
 
+def extract_pl_weights_kg(pl_df):
+    """
+    Scans the packing list dataframe (read with header=None) for
+    'Net Weight' and 'Gross Weight' summary rows and returns both in KGS.
+    Weights in the packing list are stored in LBS → converted to KGS.
+    Returns (net_kg, gross_kg) as floats; 0.0 if not found.
+    """
+    net_kg = 0.0
+    gross_kg = 0.0
+    for r in range(len(pl_df) - 1, -1, -1):
+        for c in range(len(pl_df.columns)):
+            cell = str(pl_df.iloc[r, c]).strip().lower()
+            if cell == "net weight" and net_kg == 0.0:
+                # Value is one row above, same column pattern as Quote Generator
+                try:
+                    val = clean_numeric(pl_df.iloc[r - 1, c])
+                    net_kg = round(val * 0.453592, 2)
+                except: pass
+            if cell == "gross weight" and gross_kg == 0.0:
+                try:
+                    val = clean_numeric(pl_df.iloc[r - 1, c])
+                    gross_kg = round(val * 0.453592, 2)
+                except: pass
+    return net_kg, gross_kg
+
+def fill_vgw_template(container_num, seal_num, tare_weight, net_kg, gross_kg):
+    """
+    Loads VERIFIED GROSS WEIGHT DECLARATION.xlsx, fills it, and returns
+    (bytes, None) on success or (None, error_string) on failure.
+    """
+    template_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "VERIFIED_GROSS_WEIGHT_DECLARATION.xlsx"
+    )
+    if not os.path.exists(template_path):
+        return None, (
+            "Template file **'VERIFIED GROSS WEIGHT DECLARATION.xlsx'** not found "
+            "next to main_code.py. Make sure it is committed to your repo."
+        )
+    try:
+        wb = load_workbook(template_path)
+    except Exception as e:
+        return None, f"Could not open VGW template: {e}"
+
+    ws = wb.active
+    ws['B12'] = container_num              # Container#
+    ws['D12'] = seal_num                   # Seal#
+    ws['B18'] = net_kg                     # Cargo Net Weight (KGS)
+    ws['B20'] = gross_kg                   # Cargo Gross Weight (KGS)
+    ws['B22'] = float(tare_weight)         # Container Tare Weight (KGS)
+    # B25 (Total VGW) and B36 (Date) are already live formulas — no touch needed
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue(), None
+
 # ==========================================
 # 3. DASHBOARD / TOOL SELECTION (CENTER)
 # ==========================================
@@ -170,7 +226,7 @@ if st.session_state.active_tool is None:
 # ==========================================
 else:
     if st.sidebar.button("⬅️ Back to Portal"):
-        for key in ['df_detailed', 'ci_filled_bytes']:
+        for key in ['df_detailed', 'ci_filled_bytes', 'vgw_filled_bytes', 'vgw_container_label']:
             if key in st.session_state: del st.session_state[key]
         st.session_state.active_tool = None
         st.rerun()
@@ -407,3 +463,55 @@ else:
                             file_name=filename,
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
+
+            # ── VGW DECLARATION ───────────────────────────────────────────────
+            st.divider()
+            st.subheader("⚖️ Verified Gross Weight (VGW) Declaration")
+
+            # Extract weights from packing list (already loaded above as temp_pl)
+            net_kg, gross_kg = extract_pl_weights_kg(temp_pl)
+
+            # Show extracted weights as read-only info so user can confirm
+            vgw_c1, vgw_c2, vgw_c3 = st.columns(3)
+            with vgw_c1:
+                st.metric("Cargo Net Weight (KGS)", f"{net_kg:,.2f}" if net_kg else "Not found")
+            with vgw_c2:
+                st.metric("Cargo Gross Weight (KGS)", f"{gross_kg:,.2f}" if gross_kg else "Not found")
+            with vgw_c3:
+                st.write("")  # spacer
+
+            # Manual inputs
+            vgw_m1, vgw_m2, vgw_m3 = st.columns(3)
+            with vgw_m1:
+                container_num = st.text_input("Container#", placeholder="e.g. HAMU 3039802", key="vgw_container")
+            with vgw_m2:
+                seal_num = st.text_input("Seal#", placeholder="e.g. UL-9988229", key="vgw_seal")
+            with vgw_m3:
+                tare_weight = st.number_input("Container Tare Weight (KGS)", min_value=0.0, step=10.0, key="vgw_tare")
+
+            if st.button("✍️ Fill VGW Declaration"):
+                if not container_num or not seal_num or tare_weight == 0.0:
+                    st.warning("⚠️ Please fill in Container#, Seal#, and Tare Weight before generating.")
+                elif net_kg == 0.0 or gross_kg == 0.0:
+                    st.warning("⚠️ Could not extract Net Weight or Gross Weight from the packing list. Please check the file.")
+                else:
+                    if 'vgw_filled_bytes' in st.session_state:
+                        del st.session_state.vgw_filled_bytes
+                    vgw_bytes, err = fill_vgw_template(container_num, seal_num, tare_weight, net_kg, gross_kg)
+                    if err:
+                        st.error(f"❌ {err}")
+                    else:
+                        st.session_state.vgw_filled_bytes = vgw_bytes
+                        st.session_state.vgw_container_label = container_num
+                        st.success("✅ VGW Declaration filled! Click below to download.")
+
+            # Persistent download button
+            if 'vgw_filled_bytes' in st.session_state:
+                container_tag = st.session_state.vgw_container_label.replace(" ", "_")
+                vgw_filename = f"VGW_Declaration_{container_tag}_{datetime.date.today().strftime('%Y%m%d')}.xlsx"
+                st.download_button(
+                    "📥 Download VGW Declaration",
+                    data=st.session_state.vgw_filled_bytes,
+                    file_name=vgw_filename,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
