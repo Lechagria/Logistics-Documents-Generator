@@ -181,8 +181,8 @@ def fill_packing_declaration_template(vessel, voyage, consignment, printed_name)
     ws['D12'] = vessel        # Vessel name
     ws['J12'] = voyage        # Voyage number
     ws['F14'] = consignment   # Consignment identifier (anchor of merged F14:M14)
-    ws['G38'] = printed_name  # Printed name
-    # Date of issue (A42) is =TODAY() in template — no touch needed
+    ws['G37'] = printed_name  # Printed name (anchor of merged G37:M37)
+    ws['A41'] = '=TODAY()'   # Date of issue
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -205,7 +205,7 @@ def fill_ausfta_template(bol, name_printed, po_number):
     ws['D12'] = bol              # Bill of Lading / Airway Bill (manual)
     ws['D13'] = str(po_number)   # Document Reference (same PO#)
     ws['C28'] = name_printed     # Name Printed (manual)
-    # C27 (Date) and C29 (Company Name) are already in template — no touch needed
+    ws['C27'] = '=TODAY()'   # Date
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -497,70 +497,76 @@ else:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
-            # ── APAC DOCUMENTS: PACKING DECLARATION + AUSFTA ─────────────────
-            st.divider()
-            st.subheader("🇦🇺 APAC Documents")
+            # ── APAC DOCUMENTS: only shown when Australia / APAC is selected ───
+            if selected_dest == "🇦🇺 Australia / APAC":
+                st.divider()
+                st.subheader("🇦🇺 APAC Documents")
 
-            apac_col1, apac_col2 = st.columns(2)
-
-            # ── LEFT: Packing Declaration ─────────────────────────────────────
-            with apac_col1:
-                st.markdown("#### 📋 Packing Declaration")
-
-                pd_m1, pd_m2 = st.columns(2)
-                with pd_m1: pd_vessel      = st.text_input("Vessel Name",         placeholder="e.g. MAERSK SENTOSA",  key="pd_vessel")
-                with pd_m2: pd_voyage      = st.text_input("Voyage Number",       placeholder="e.g. 123W",            key="pd_voyage")
-                pd_consignment = st.text_input("Consignment Number (HBL/MBL/INV/CTNR)", placeholder="e.g. MSNU2598611", key="pd_consignment")
-                pd_printed_name = st.text_input("Printed Name",                  placeholder="e.g. Kevin Alvarez",   key="pd_name")
-
-                if st.button("✍️ Fill Packing Declaration"):
-                    if not pd_vessel or not pd_voyage or not pd_consignment or not pd_printed_name:
-                        st.warning("⚠️ Please fill in all fields before generating.")
-                    else:
-                        if 'pd_filled_bytes' in st.session_state: del st.session_state.pd_filled_bytes
-                        pd_bytes, err = fill_packing_declaration_template(pd_vessel, pd_voyage, pd_consignment, pd_printed_name)
-                        if err: st.error(f"❌ {err}")
-                        else:
-                            st.session_state.pd_filled_bytes       = pd_bytes
-                            st.session_state.pd_consignment_label  = pd_consignment
-                            st.success("✅ Packing Declaration filled! Click below to download.")
-
-                if 'pd_filled_bytes' in st.session_state:
-                    consignment_tag = st.session_state.pd_consignment_label.replace(" ", "_")
-                    st.download_button(
-                        "📥 Download Packing Declaration",
-                        data=st.session_state.pd_filled_bytes,
-                        file_name=f"Packing_Declaration_{consignment_tag}_{datetime.date.today().strftime('%Y%m%d')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-
-            # ── RIGHT: AUSFTA Declaration ─────────────────────────────────────
-            with apac_col2:
-                st.markdown("#### 🤝 AUSFTA Declaration")
-
-                # PO# auto-pulled from SAP — shown as read-only info
+                # PO# auto-pulled from SAP
                 po_number = ", ".join(str(p) for p in st.session_state.df_detailed['PO#'].dropna().unique())
                 st.info(f"📎 Invoice & Document Reference: **{po_number}** (from SAP export)")
 
-                ausfta_bol  = st.text_input("Bill of Lading / Airway Bill", placeholder="e.g. S05336945/MISYD5336945", key="ausfta_bol")
-                ausfta_name = st.text_input("Name Printed",                 placeholder="e.g. Kevin Alvarez",          key="ausfta_name")
+                # ── Shared name input ──────────────────────────────────────────
+                apac_shared_name = st.text_input(
+                    "Name Printed (used for both documents)",
+                    placeholder="e.g. Kevin Alvarez",
+                    key="apac_shared_name"
+                )
 
-                if st.button("✍️ Fill AUSFTA Declaration"):
-                    if not ausfta_bol or not ausfta_name:
-                        st.warning("⚠️ Please fill in Bill of Lading and Name Printed before generating.")
-                    else:
-                        if 'ausfta_filled_bytes' in st.session_state: del st.session_state.ausfta_filled_bytes
-                        ausfta_bytes, err = fill_ausfta_template(ausfta_bol, ausfta_name, po_number)
-                        if err: st.error(f"❌ {err}")
+                apac_col1, apac_col2 = st.columns(2)
+
+                # ── LEFT: Packing Declaration ──────────────────────────────────
+                with apac_col1:
+                    st.markdown("#### 📋 Packing Declaration")
+
+                    pd_m1, pd_m2 = st.columns(2)
+                    with pd_m1: pd_vessel = st.text_input("Vessel Name",   placeholder="e.g. MAERSK SENTOSA", key="pd_vessel")
+                    with pd_m2: pd_voyage = st.text_input("Voyage Number", placeholder="e.g. 123W",           key="pd_voyage")
+                    pd_consignment = st.text_input("Consignment Number (HBL/MBL/INV/CTNR)", placeholder="e.g. MSNU2598611", key="pd_consignment")
+
+                    if st.button("✍️ Fill Packing Declaration"):
+                        if not pd_vessel or not pd_voyage or not pd_consignment or not apac_shared_name:
+                            st.warning("⚠️ Please fill in all fields (including Name Printed above) before generating.")
                         else:
-                            st.session_state.ausfta_filled_bytes = ausfta_bytes
-                            st.success("✅ AUSFTA Declaration filled! Click below to download.")
+                            if 'pd_filled_bytes' in st.session_state: del st.session_state.pd_filled_bytes
+                            pd_bytes, err = fill_packing_declaration_template(pd_vessel, pd_voyage, pd_consignment, apac_shared_name)
+                            if err: st.error(f"❌ {err}")
+                            else:
+                                st.session_state.pd_filled_bytes      = pd_bytes
+                                st.session_state.pd_consignment_label = pd_consignment
+                                st.success("✅ Packing Declaration filled! Click below to download.")
 
-                if 'ausfta_filled_bytes' in st.session_state:
-                    po_tag = po_number.replace(", ", "_")
-                    st.download_button(
-                        "📥 Download AUSFTA Declaration",
-                        data=st.session_state.ausfta_filled_bytes,
-                        file_name=f"AUSFTA_Declaration_{po_tag}_{datetime.date.today().strftime('%Y%m%d')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
+                    if 'pd_filled_bytes' in st.session_state:
+                        consignment_tag = st.session_state.pd_consignment_label.replace(" ", "_")
+                        st.download_button(
+                            "📥 Download Packing Declaration",
+                            data=st.session_state.pd_filled_bytes,
+                            file_name=f"Packing_Declaration_{consignment_tag}_{datetime.date.today().strftime('%Y%m%d')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+
+                # ── RIGHT: AUSFTA Declaration ──────────────────────────────────
+                with apac_col2:
+                    st.markdown("#### 🤝 AUSFTA Declaration")
+
+                    ausfta_bol = st.text_input("Bill of Lading / Airway Bill", placeholder="e.g. S05336945/MISYD5336945", key="ausfta_bol")
+
+                    if st.button("✍️ Fill AUSFTA Declaration"):
+                        if not ausfta_bol or not apac_shared_name:
+                            st.warning("⚠️ Please fill in Bill of Lading and Name Printed (above) before generating.")
+                        else:
+                            if 'ausfta_filled_bytes' in st.session_state: del st.session_state.ausfta_filled_bytes
+                            ausfta_bytes, err = fill_ausfta_template(ausfta_bol, apac_shared_name, po_number)
+                            if err: st.error(f"❌ {err}")
+                            else:
+                                st.session_state.ausfta_filled_bytes = ausfta_bytes
+                                st.success("✅ AUSFTA Declaration filled! Click below to download.")
+
+                    if 'ausfta_filled_bytes' in st.session_state:
+                        po_tag = po_number.replace(", ", "_")
+                        st.download_button(
+                            "📥 Download AUSFTA Declaration",
+                            data=st.session_state.ausfta_filled_bytes,
+                            file_name=f"AUSFTA_Declaration_{po_tag}_{datetime.date.today().strftime('%Y%m%d')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
