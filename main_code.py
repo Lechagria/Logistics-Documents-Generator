@@ -180,7 +180,7 @@ def fill_packing_declaration_template(vessel, voyage, consignment, printed_name)
     ws = wb.active
     ws['D12'] = vessel        # Vessel name
     ws['J12'] = voyage        # Voyage number
-    ws['G14'] = consignment   # Consignment identifier
+    ws['F14'] = consignment   # Consignment identifier (anchor of merged F14:M14)
     ws['G38'] = printed_name  # Printed name
     # Date of issue (A42) is =TODAY() in template — no touch needed
 
