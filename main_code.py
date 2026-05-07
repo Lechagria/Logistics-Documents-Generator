@@ -70,11 +70,9 @@ def update_detailed_state():
         for row_idx, changes in edits.items():
             for col_name, new_val in changes.items():
                 st.session_state.df_detailed.at[row_idx, col_name] = new_val
-            
-            q = st.session_state.df_detailed.at[row_idx, "Quantity"]
-            p = st.session_state.df_detailed.at[row_idx, "Unit Price"]
+            q  = st.session_state.df_detailed.at[row_idx, "Quantity"]
+            p  = st.session_state.df_detailed.at[row_idx, "Unit Price"]
             uw = st.session_state.df_detailed.at[row_idx, "Unit_Weight_KG"]
-            
             st.session_state.df_detailed.at[row_idx, "Total"] = round(q * p, 2)
             st.session_state.df_detailed.at[row_idx, "Total Weight (KG)"] = round(q * uw, 2)
 
@@ -88,53 +86,38 @@ INVOICE_DESTINATIONS = {
 }
 
 # ── Row layout constants (confirmed across all templates) ──────────────────
-CI_DATA_START   = 17   # first line-item row
-CI_DATA_END     = 54   # last line-item row  (38 rows total)
+CI_DATA_START   = 17
+CI_DATA_END     = 54
 CI_MAX_ROWS     = CI_DATA_END - CI_DATA_START + 1   # 38
 CI_SUBTOTAL_ROW = 55
 CI_TOTAL_ROW    = 58
 
 def fill_commercial_invoice_template(df_detailed, template_filename):
-    """
-    Loads the selected destination template, fills it with df_detailed data.
-    Returns (bytes, None) on success or (None, error_string) on failure.
-    Hard-stops if row count exceeds 38 — caller must handle the warning.
-    """
     template_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), template_filename)
-
     if not os.path.exists(template_path):
-        return None, (
-            f"Template file **'{template_filename}'** not found next to main_code.py. "
-            "Make sure it is committed to your repo."
-        )
-
+        return None, f"Template file **'{template_filename}'** not found next to main_code.py."
     try:
         wb = load_workbook(template_path)
     except Exception as e:
         return None, f"Could not open template '{template_filename}': {e}"
 
     ws = wb.active
-
-    # ── Header fields ──────────────────────────────────────────────────────
     po_list = ", ".join(str(p) for p in df_detailed['PO#'].dropna().unique())
     ws['F4'] = po_list
     ws['F5'] = datetime.date.today().strftime("%m/%d/%Y")
 
-    # ── Write line items ───────────────────────────────────────────────────
     items = df_detailed[['SKU', 'HTS Code', 'Origin', 'Description',
                           'Quantity', 'Unit Price']].values.tolist()
-
     for i, item in enumerate(items):
         r = CI_DATA_START + i
-        ws.cell(row=r, column=1).value = str(item[0])              # SKU
-        ws.cell(row=r, column=2).value = str(item[1])              # HTS Code
-        ws.cell(row=r, column=3).value = str(item[2])              # Origin
-        ws.cell(row=r, column=4).value = str(item[3])              # Description
-        ws.cell(row=r, column=5).value = int(item[4])              # Quantity
-        ws.cell(row=r, column=6).value = round(float(item[5]), 3)  # Unit Price
-        ws.cell(row=r, column=7).value = f'=F{r}*E{r}'            # Total (formula)
+        ws.cell(row=r, column=1).value = str(item[0])
+        ws.cell(row=r, column=2).value = str(item[1])
+        ws.cell(row=r, column=3).value = str(item[2])
+        ws.cell(row=r, column=4).value = str(item[3])
+        ws.cell(row=r, column=5).value = int(item[4])
+        ws.cell(row=r, column=6).value = round(float(item[5]), 3)
+        ws.cell(row=r, column=7).value = f'=F{r}*E{r}'
 
-    # ── Subtotal SUM covers only populated rows ────────────────────────────
     last_data_row = CI_DATA_START + len(items) - 1
     ws[f'E{CI_SUBTOTAL_ROW}'] = f'=SUM(E{CI_DATA_START}:E{last_data_row})'
     ws[f'G{CI_SUBTOTAL_ROW}'] = f'=SUM(G{CI_DATA_START}:G{last_data_row})'
@@ -144,56 +127,85 @@ def fill_commercial_invoice_template(df_detailed, template_filename):
     return buf.getvalue(), None
 
 def extract_pl_weights_kg(pl_df):
-    """
-    Scans the packing list dataframe (read with header=None) for
-    'Net Weight' and 'Gross Weight' summary rows and returns both in KGS.
-    Weights in the packing list are stored in LBS → converted to KGS.
-    Returns (net_kg, gross_kg) as floats; 0.0 if not found.
-    """
     net_kg = 0.0
     gross_kg = 0.0
     for r in range(len(pl_df) - 1, -1, -1):
         for c in range(len(pl_df.columns)):
-            cell = str(pl_df.iloc[r, c]).strip().lower()
-            if cell == "net weight" and net_kg == 0.0:
-                # Value is one row above, same column pattern as Quote Generator
+            cell_val = str(pl_df.iloc[r, c]).strip().lower()
+            if cell_val == "net weight" and net_kg == 0.0:
                 try:
-                    val = clean_numeric(pl_df.iloc[r - 1, c])
-                    net_kg = round(val * 0.453592, 2)
+                    net_kg = round(clean_numeric(pl_df.iloc[r - 1, c]) * 0.453592, 2)
                 except: pass
-            if cell == "gross weight" and gross_kg == 0.0:
+            if cell_val == "gross weight" and gross_kg == 0.0:
                 try:
-                    val = clean_numeric(pl_df.iloc[r - 1, c])
-                    gross_kg = round(val * 0.453592, 2)
+                    gross_kg = round(clean_numeric(pl_df.iloc[r - 1, c]) * 0.453592, 2)
                 except: pass
     return net_kg, gross_kg
 
 def fill_vgw_template(container_num, seal_num, tare_weight, net_kg, gross_kg):
-    """
-    Loads VERIFIED GROSS WEIGHT DECLARATION.xlsx, fills it, and returns
-    (bytes, None) on success or (None, error_string) on failure.
-    """
     template_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "VERIFIED_GROSS_WEIGHT_DECLARATION.xlsx"
     )
     if not os.path.exists(template_path):
-        return None, (
-            "Template file **'VERIFIED GROSS WEIGHT DECLARATION.xlsx'** not found "
-            "next to main_code.py. Make sure it is committed to your repo."
-        )
+        return None, "Template file **'VERIFIED_GROSS_WEIGHT_DECLARATION.xlsx'** not found next to main_code.py."
     try:
         wb = load_workbook(template_path)
     except Exception as e:
         return None, f"Could not open VGW template: {e}"
 
     ws = wb.active
-    ws['B12'] = container_num              # Container#
-    ws['D12'] = seal_num                   # Seal#
-    ws['B18'] = net_kg                     # Cargo Net Weight (KGS)
-    ws['B20'] = gross_kg                   # Cargo Gross Weight (KGS)
-    ws['B22'] = float(tare_weight)         # Container Tare Weight (KGS)
-    # B25 (Total VGW) and B36 (Date) are already live formulas — no touch needed
+    ws['B12'] = container_num
+    ws['D12'] = seal_num
+    ws['B18'] = net_kg
+    ws['B20'] = gross_kg
+    ws['B22'] = float(tare_weight)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue(), None
+
+def fill_packing_declaration_template(vessel, voyage, consignment, printed_name):
+    template_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "Packing_Declaration_MONAT_AUS.xlsx"
+    )
+    if not os.path.exists(template_path):
+        return None, "Template file **'Packing_Declaration_MONAT_AUS.xlsx'** not found next to main_code.py."
+    try:
+        wb = load_workbook(template_path)
+    except Exception as e:
+        return None, f"Could not open Packing Declaration template: {e}"
+
+    ws = wb.active
+    ws['D12'] = vessel        # Vessel name
+    ws['J12'] = voyage        # Voyage number
+    ws['G14'] = consignment   # Consignment identifier
+    ws['G38'] = printed_name  # Printed name
+    # Date of issue (A42) is =TODAY() in template — no touch needed
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue(), None
+
+def fill_ausfta_template(bol, name_printed, po_number):
+    template_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "AUSFTA_Declaration_MONAT.xlsx"
+    )
+    if not os.path.exists(template_path):
+        return None, "Template file **'AUSFTA_Declaration_MONAT.xlsx'** not found next to main_code.py."
+    try:
+        wb = load_workbook(template_path)
+    except Exception as e:
+        return None, f"Could not open AUSFTA template: {e}"
+
+    ws = wb.active
+    ws['D11'] = str(po_number)   # Invoice Number (from PO#)
+    ws['D12'] = bol              # Bill of Lading / Airway Bill (manual)
+    ws['D13'] = str(po_number)   # Document Reference (same PO#)
+    ws['C28'] = name_printed     # Name Printed (manual)
+    # C27 (Date) and C29 (Company Name) are already in template — no touch needed
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -206,9 +218,9 @@ if st.session_state.active_tool is None:
     st.title("📂 Logistics Operations Portal")
     st.subheader("Select a tool to begin:")
     st.write("---")
-    
+
     col1, col2 = st.columns(2)
-    
+
     with col1:
         if st.button("📦 Quote Generator"):
             st.session_state.active_tool = "Quote Pipeline"
@@ -226,7 +238,8 @@ if st.session_state.active_tool is None:
 # ==========================================
 else:
     if st.sidebar.button("⬅️ Back to Portal"):
-        for key in ['df_detailed', 'ci_filled_bytes', 'vgw_filled_bytes', 'vgw_container_label']:
+        for key in ['df_detailed', 'ci_filled_bytes', 'vgw_filled_bytes',
+                    'vgw_container_label', 'pd_filled_bytes', 'ausfta_filled_bytes']:
             if key in st.session_state: del st.session_state[key]
         st.session_state.active_tool = None
         st.rerun()
@@ -243,7 +256,7 @@ else:
             "OTHER (Type Manually below)"
         ]
         services = ["40\" REEFER", "40\" DRY", "20\" DRY", "HAZMAT LCL", "LCL Ocean", "LTL Road", "Air Freight", "Courier"]
-        
+
         selected_dest = st.sidebar.selectbox("Select Destination", destinations)
         destination = st.sidebar.text_input("Manual Destination Entry", value=selected_dest) if selected_dest == "OTHER (Type Manually below)" else selected_dest
         service = st.sidebar.selectbox("Service", services)
@@ -256,7 +269,7 @@ else:
 
         if packing_file:
             df_raw = pd.read_excel(packing_file, header=None).astype(str)
-            
+
             def get_val(keyword, row_off=0, col_off=0):
                 for r in range(len(df_raw)-1, -1, -1):
                     for c in range(len(df_raw.columns)):
@@ -266,9 +279,9 @@ else:
                 return "0"
 
             pallets_final = int(clean_numeric(get_val("Pallets", row_off=-1)))
-            units_final = int(clean_numeric(get_val("Units", row_off=-1)))
-            lbs_final = clean_numeric(get_val("Gross Weight", row_off=-1))
-            kgs_final = lbs_final * 0.453592
+            units_final   = int(clean_numeric(get_val("Units", row_off=-1)))
+            lbs_final     = clean_numeric(get_val("Gross Weight", row_off=-1))
+            kgs_final     = lbs_final * 0.453592
 
             dim_list = []
             for c in range(len(df_raw.columns)):
@@ -277,7 +290,7 @@ else:
                     dim_list = [d.strip() for d in potential_dims if "x" in str(d).lower() and len(str(d)) > 5]
                     break
 
-            dim_counts = Counter(dim_list)
+            dim_counts    = Counter(dim_list)
             formatted_dims = [f"{d} (x{count})" if count > 1 else d for d, count in dim_counts.items()]
 
             st.success(f"✅ Data Extracted: **{pallets_final}** Pallets | **{units_final:,}** Units")
@@ -290,17 +303,25 @@ else:
                 if formatted_dims:
                     quote_data.append(["DIMENSIONS", formatted_dims[0]])
                     for extra_dim in formatted_dims[1:]: quote_data.append(["", extra_dim])
-                
+
                 quote_data.extend([["", ""], ["TOTAL WEIGHT", f"{lbs_final:,.2f} LBS | {kgs_final:,.2f} KGS"],
                                    ["COMMODITY", commodity], ["INCOTERMS", incoterms], ["VALUE OF CARGO", cargo_value]])
-                
+
                 df_output = pd.DataFrame(quote_data)
                 buf = io.BytesIO()
                 with pd.ExcelWriter(buf, engine='openpyxl') as writer:
                     df_output.to_excel(writer, index=False, header=False)
 
                 dim_string = "".join([f"\n- • Dimensions: {d}" for d in formatted_dims])
-                email_body = f"Hi Team,\n\nHope you are having a great week! \n\nPlease find the details below for a new {service} shipment quote — please include insurance cost:\n\n-• Destination: {destination}\n-• Service: {service}\n-• Total Units: {units_final:,}\n-• Pallets: {pallets_final}{dim_string}\n-• Total Weight: {lbs_final:,.2f} LBS | {kgs_final:,.2f} KGS\n-• Commodity: {commodity}\n-• Value: {cargo_value}\n-• Incoterms: {incoterms}\n\nThank you for your help."
+                email_body = (
+                    f"Hi Team,\n\nHope you are having a great week! \n\n"
+                    f"Please find the details below for a new {service} shipment quote — please include insurance cost:\n\n"
+                    f"- • Destination: {destination}\n- • Service: {service}\n"
+                    f"- • Total Units: {units_final:,}\n- • Pallets: {pallets_final}{dim_string}\n"
+                    f"- • Total Weight: {lbs_final:,.2f} LBS | {kgs_final:,.2f} KGS\n"
+                    f"- • Commodity: {commodity}\n- • Value: {cargo_value}\n- • Incoterms: {incoterms}\n\n"
+                    f"Thank you for your help."
+                )
 
                 st.divider()
                 col1, col2 = st.columns(2)
@@ -312,20 +333,20 @@ else:
                     st.subheader("2. Email Draft")
                     st.code(email_body, language="markdown")
 
-    # --- TOOL 2: INVOICE EXTRACTOR ---
+    # --- TOOL 2: LOGISTICS PAPERWORK GENERATOR ---
     elif st.session_state.active_tool == "Invoice Extractor":
         st.title("🧾 Logistics Paperwork Generator")
-        
+
         c1, c2 = st.columns(2)
         with c1: sap_file = st.file_uploader("1. Upload SAP Export", type=['csv', 'xlsx'])
-        with c2: pl_file = st.file_uploader("2. Upload Packing List", type=['csv', 'xlsx'])
+        with c2: pl_file  = st.file_uploader("2. Upload Packing List", type=['csv', 'xlsx'])
 
         if sap_file and pl_file:
             hts_mapping = get_hts_data()
-            
+
             # --- Robust Multi-PO Weight Extraction ---
             temp_pl = pd.read_excel(pl_file, header=None) if pl_file.name.endswith('.xlsx') else pd.read_csv(pl_file, header=None)
-            weight_map = {}
+            weight_map   = {}
             current_cols = None
 
             for i, row in temp_pl.iterrows():
@@ -333,12 +354,11 @@ else:
                 if any(x in str(row_vals).lower() for x in ["sku", "material"]):
                     current_cols = [v.replace('\n', ' ').strip() for v in row_vals]
                     continue
-                
                 if current_cols:
                     row_dict = dict(zip(current_cols, row.values))
                     sku = clean_sku(row_dict.get('SKU') or row_dict.get('Material'))
                     if sku and sku != "nan":
-                        tw_box = clean_numeric(row_dict.get('Total Weight / Box') or row_dict.get('Tot. Weight / Bxs'))
+                        tw_box  = clean_numeric(row_dict.get('Total Weight / Box') or row_dict.get('Tot. Weight / Bxs'))
                         t_units = clean_numeric(row_dict.get('Total Units'))
                         if t_units > 0:
                             weight_map[sku] = (tw_box / t_units) * 0.453592
@@ -347,17 +367,15 @@ else:
             if 'df_detailed' not in st.session_state:
                 raw_df = pd.read_csv(sap_file) if sap_file.name.endswith('.csv') else pd.read_excel(sap_file)
                 raw_df.columns = [str(col).strip() for col in raw_df.columns]
-                
+
                 rows = []
                 for _, row in raw_df.iterrows():
                     sku = clean_sku(row.get('Material', ''))
                     if not sku: continue
-                    
                     sku_info = hts_mapping.get(sku, {"hts": "", "desc": ""})
-                    qty = clean_numeric(row.get('Order Quantity', 0))
-                    u_price = round(clean_numeric(row.get('Net Price', 0)) / 1000, 2)
+                    qty      = clean_numeric(row.get('Order Quantity', 0))
+                    u_price  = round(clean_numeric(row.get('Net Price', 0)) / 1000, 2)
                     u_weight = weight_map.get(sku, 0.0)
-                    
                     rows.append({
                         "PO#": str(row.get('Purchasing Document', '')),
                         "SKU": sku, "HTS Code": sku_info["hts"],
@@ -373,9 +391,7 @@ else:
             edited_detailed = st.data_editor(
                 st.session_state.df_detailed.drop(columns=['Customs_Desc_Internal', 'Unit_Weight_KG']),
                 use_container_width=True, hide_index=True,
-                column_config={
-                    "Unit Price": st.column_config.NumberColumn(format="$%.3f"),
-                },
+                column_config={"Unit Price": st.column_config.NumberColumn(format="$%.3f")},
                 key="detailed_editor", on_change=update_detailed_state
             )
 
@@ -385,23 +401,21 @@ else:
             ).groupby(['Customs_Desc_Internal', 'HTS Code']).agg({
                 'Quantity': 'sum', 'Total Weight (KG)': 'sum', 'Total': 'sum'
             }).reset_index()
-            
             summary_grouped.columns = ['Customs Description', 'HTS Code', 'Total Qty', 'Total Weight (KG)', 'Total Value']
 
             st.data_editor(
                 summary_grouped, use_container_width=True, hide_index=True,
                 column_config={
-                    "Total Value": st.column_config.NumberColumn(format="$%.2f"),
-                    "Total Weight (KG)": st.column_config.NumberColumn(format="%.2f kg")
+                    "Total Value":        st.column_config.NumberColumn(format="$%.2f"),
+                    "Total Weight (KG)":  st.column_config.NumberColumn(format="%.2f kg")
                 },
                 key="summary_editor"
             )
 
-            # ── Export buttons ─────────────────────────────────────────────────
+            # ── SLI Export + Commercial Invoice ───────────────────────────────
             st.divider()
             col_dl1, col_dl2 = st.columns(2)
 
-            # Left column: existing SLI Excel download
             with col_dl1:
                 st.subheader("📊 SLI Export")
                 excel_buf = io.BytesIO()
@@ -409,58 +423,38 @@ else:
                     edited_detailed.to_excel(writer, index=False, sheet_name="Details")
                     summary_grouped.to_excel(writer, index=False, sheet_name="Summary")
                 st.download_button(
-                    "📥 Download SLI Excel",
-                    excel_buf.getvalue(),
-                    "SLI_Invoice.xlsx",
+                    "📥 Download SLI Excel", excel_buf.getvalue(), "SLI_Invoice.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
-            # Right column: Commercial Invoice filler
             with col_dl2:
                 st.subheader("📄 Commercial Invoice")
-
-                selected_dest = st.selectbox(
-                    "Select Destination",
-                    options=list(INVOICE_DESTINATIONS.keys()),
-                    key="ci_destination"
-                )
+                selected_dest    = st.selectbox("Select Destination", options=list(INVOICE_DESTINATIONS.keys()), key="ci_destination")
                 template_filename = INVOICE_DESTINATIONS[selected_dest]
-
-                row_count = len(st.session_state.df_detailed)
+                row_count        = len(st.session_state.df_detailed)
 
                 if row_count > CI_MAX_ROWS:
                     st.warning(
                         f"⚠️ This shipment has **{row_count} SKUs**, which exceeds the "
-                        f"**{CI_MAX_ROWS}-row** capacity of the template. "
-                        "Please fill this invoice manually."
+                        f"**{CI_MAX_ROWS}-row** template capacity. Please fill this invoice manually."
                     )
                 else:
                     if st.button("✍️ Fill Commercial Invoice Template"):
-                        if 'ci_filled_bytes' in st.session_state:
-                            del st.session_state.ci_filled_bytes
-
-                        ci_bytes, err = fill_commercial_invoice_template(
-                            st.session_state.df_detailed, template_filename
-                        )
-
-                        if err:
-                            st.error(f"❌ {err}")
+                        if 'ci_filled_bytes' in st.session_state: del st.session_state.ci_filled_bytes
+                        ci_bytes, err = fill_commercial_invoice_template(st.session_state.df_detailed, template_filename)
+                        if err: st.error(f"❌ {err}")
                         else:
-                            st.session_state.ci_filled_bytes = ci_bytes
-                            st.session_state.ci_dest_label = selected_dest
+                            st.session_state.ci_filled_bytes  = ci_bytes
+                            st.session_state.ci_dest_label    = selected_dest
                             st.success("✅ Invoice filled! Click below to download.")
 
-                    # Persistent download button — survives reruns
                     if 'ci_filled_bytes' in st.session_state:
-                        po_str = "_".join(
-                            str(p) for p in st.session_state.df_detailed['PO#'].dropna().unique()
-                        )
+                        po_str   = "_".join(str(p) for p in st.session_state.df_detailed['PO#'].dropna().unique())
                         dest_tag = template_filename.replace("Commercial_Invoice_", "").replace(".xlsx", "")
-                        filename = f"Commercial_Invoice_{dest_tag}_{po_str}_{datetime.date.today().strftime('%Y%m%d')}.xlsx"
                         st.download_button(
                             "📥 Download Commercial Invoice",
                             data=st.session_state.ci_filled_bytes,
-                            file_name=filename,
+                            file_name=f"Commercial_Invoice_{dest_tag}_{po_str}_{datetime.date.today().strftime('%Y%m%d')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
 
@@ -468,50 +462,105 @@ else:
             st.divider()
             st.subheader("⚖️ Verified Gross Weight (VGW) Declaration")
 
-            # Extract weights from packing list (already loaded above as temp_pl)
             net_kg, gross_kg = extract_pl_weights_kg(temp_pl)
 
-            # Show extracted weights as read-only info so user can confirm
             vgw_c1, vgw_c2, vgw_c3 = st.columns(3)
-            with vgw_c1:
-                st.metric("Cargo Net Weight (KGS)", f"{net_kg:,.2f}" if net_kg else "Not found")
-            with vgw_c2:
-                st.metric("Cargo Gross Weight (KGS)", f"{gross_kg:,.2f}" if gross_kg else "Not found")
-            with vgw_c3:
-                st.write("")  # spacer
+            with vgw_c1: st.metric("Cargo Net Weight (KGS)",   f"{net_kg:,.2f}"   if net_kg   else "Not found")
+            with vgw_c2: st.metric("Cargo Gross Weight (KGS)", f"{gross_kg:,.2f}" if gross_kg else "Not found")
+            with vgw_c3: st.write("")
 
-            # Manual inputs
             vgw_m1, vgw_m2, vgw_m3 = st.columns(3)
-            with vgw_m1:
-                container_num = st.text_input("Container#", placeholder="e.g. HAMU 3039802", key="vgw_container")
-            with vgw_m2:
-                seal_num = st.text_input("Seal#", placeholder="e.g. UL-9988229", key="vgw_seal")
-            with vgw_m3:
-                tare_weight = st.number_input("Container Tare Weight (KGS)", min_value=0.0, step=10.0, key="vgw_tare")
+            with vgw_m1: container_num = st.text_input("Container#",                    placeholder="e.g. HAMU 3039802", key="vgw_container")
+            with vgw_m2: seal_num      = st.text_input("Seal#",                         placeholder="e.g. UL-9988229",   key="vgw_seal")
+            with vgw_m3: tare_weight   = st.number_input("Container Tare Weight (KGS)", min_value=0.0, step=10.0,        key="vgw_tare")
 
             if st.button("✍️ Fill VGW Declaration"):
                 if not container_num or not seal_num or tare_weight == 0.0:
                     st.warning("⚠️ Please fill in Container#, Seal#, and Tare Weight before generating.")
                 elif net_kg == 0.0 or gross_kg == 0.0:
-                    st.warning("⚠️ Could not extract Net Weight or Gross Weight from the packing list. Please check the file.")
+                    st.warning("⚠️ Could not extract Net/Gross Weight from the packing list. Please check the file.")
                 else:
-                    if 'vgw_filled_bytes' in st.session_state:
-                        del st.session_state.vgw_filled_bytes
+                    if 'vgw_filled_bytes' in st.session_state: del st.session_state.vgw_filled_bytes
                     vgw_bytes, err = fill_vgw_template(container_num, seal_num, tare_weight, net_kg, gross_kg)
-                    if err:
-                        st.error(f"❌ {err}")
+                    if err: st.error(f"❌ {err}")
                     else:
-                        st.session_state.vgw_filled_bytes = vgw_bytes
-                        st.session_state.vgw_container_label = container_num
+                        st.session_state.vgw_filled_bytes      = vgw_bytes
+                        st.session_state.vgw_container_label   = container_num
                         st.success("✅ VGW Declaration filled! Click below to download.")
 
-            # Persistent download button
             if 'vgw_filled_bytes' in st.session_state:
                 container_tag = st.session_state.vgw_container_label.replace(" ", "_")
-                vgw_filename = f"VGW_Declaration_{container_tag}_{datetime.date.today().strftime('%Y%m%d')}.xlsx"
                 st.download_button(
                     "📥 Download VGW Declaration",
                     data=st.session_state.vgw_filled_bytes,
-                    file_name=vgw_filename,
+                    file_name=f"VGW_Declaration_{container_tag}_{datetime.date.today().strftime('%Y%m%d')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
+
+            # ── APAC DOCUMENTS: PACKING DECLARATION + AUSFTA ─────────────────
+            st.divider()
+            st.subheader("🇦🇺 APAC Documents")
+
+            apac_col1, apac_col2 = st.columns(2)
+
+            # ── LEFT: Packing Declaration ─────────────────────────────────────
+            with apac_col1:
+                st.markdown("#### 📋 Packing Declaration")
+
+                pd_m1, pd_m2 = st.columns(2)
+                with pd_m1: pd_vessel      = st.text_input("Vessel Name",         placeholder="e.g. MAERSK SENTOSA",  key="pd_vessel")
+                with pd_m2: pd_voyage      = st.text_input("Voyage Number",       placeholder="e.g. 123W",            key="pd_voyage")
+                pd_consignment = st.text_input("Consignment Number (HBL/MBL/INV/CTNR)", placeholder="e.g. MSNU2598611", key="pd_consignment")
+                pd_printed_name = st.text_input("Printed Name",                  placeholder="e.g. Kevin Alvarez",   key="pd_name")
+
+                if st.button("✍️ Fill Packing Declaration"):
+                    if not pd_vessel or not pd_voyage or not pd_consignment or not pd_printed_name:
+                        st.warning("⚠️ Please fill in all fields before generating.")
+                    else:
+                        if 'pd_filled_bytes' in st.session_state: del st.session_state.pd_filled_bytes
+                        pd_bytes, err = fill_packing_declaration_template(pd_vessel, pd_voyage, pd_consignment, pd_printed_name)
+                        if err: st.error(f"❌ {err}")
+                        else:
+                            st.session_state.pd_filled_bytes       = pd_bytes
+                            st.session_state.pd_consignment_label  = pd_consignment
+                            st.success("✅ Packing Declaration filled! Click below to download.")
+
+                if 'pd_filled_bytes' in st.session_state:
+                    consignment_tag = st.session_state.pd_consignment_label.replace(" ", "_")
+                    st.download_button(
+                        "📥 Download Packing Declaration",
+                        data=st.session_state.pd_filled_bytes,
+                        file_name=f"Packing_Declaration_{consignment_tag}_{datetime.date.today().strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+
+            # ── RIGHT: AUSFTA Declaration ─────────────────────────────────────
+            with apac_col2:
+                st.markdown("#### 🤝 AUSFTA Declaration")
+
+                # PO# auto-pulled from SAP — shown as read-only info
+                po_number = ", ".join(str(p) for p in st.session_state.df_detailed['PO#'].dropna().unique())
+                st.info(f"📎 Invoice & Document Reference: **{po_number}** (from SAP export)")
+
+                ausfta_bol  = st.text_input("Bill of Lading / Airway Bill", placeholder="e.g. S05336945/MISYD5336945", key="ausfta_bol")
+                ausfta_name = st.text_input("Name Printed",                 placeholder="e.g. Kevin Alvarez",          key="ausfta_name")
+
+                if st.button("✍️ Fill AUSFTA Declaration"):
+                    if not ausfta_bol or not ausfta_name:
+                        st.warning("⚠️ Please fill in Bill of Lading and Name Printed before generating.")
+                    else:
+                        if 'ausfta_filled_bytes' in st.session_state: del st.session_state.ausfta_filled_bytes
+                        ausfta_bytes, err = fill_ausfta_template(ausfta_bol, ausfta_name, po_number)
+                        if err: st.error(f"❌ {err}")
+                        else:
+                            st.session_state.ausfta_filled_bytes = ausfta_bytes
+                            st.success("✅ AUSFTA Declaration filled! Click below to download.")
+
+                if 'ausfta_filled_bytes' in st.session_state:
+                    po_tag = po_number.replace(", ", "_")
+                    st.download_button(
+                        "📥 Download AUSFTA Declaration",
+                        data=st.session_state.ausfta_filled_bytes,
+                        file_name=f"AUSFTA_Declaration_{po_tag}_{datetime.date.today().strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
