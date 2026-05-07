@@ -216,7 +216,7 @@ if st.session_state.active_tool is None:
         st.info("Extract packing list data and generate shipment quote templates for carriers.")
 
     with col2:
-        if st.button("🧾 Data Extractor for Invoice & SLI"):
+        if st.button("🧾 Data Extractor & Paperwork Generator"):
             st.session_state.active_tool = "Invoice Extractor"
             st.rerun()
         st.info("Convert SAP Exports into formatted Customs Invoices with editable HTS summaries.")
@@ -300,7 +300,7 @@ else:
                     df_output.to_excel(writer, index=False, header=False)
 
                 dim_string = "".join([f"\n- • Dimensions: {d}" for d in formatted_dims])
-                email_body = f"Hi Team,\n\nHope you are having a great week! \n\nPlease find the details below for a new {service} shipment quote — please include insurance cost:\n\n- • Destination: {destination}\n- • Service: {service}\n- • Total Units: {units_final:,}\n- • Pallets: {pallets_final}{dim_string}\n- • Total Weight: {lbs_final:,.2f} LBS | {kgs_final:,.2f} KGS\n- • Commodity: {commodity}\n- • Value: {cargo_value}\n- • Incoterms: {incoterms}\n\nThank you for your help."
+                email_body = f"Hi Team,\n\nHope you are having a great week! \n\nPlease find the details below for a new {service} shipment quote — please include insurance cost:\n\n-• Destination: {destination}\n-• Service: {service}\n-• Total Units: {units_final:,}\n-• Pallets: {pallets_final}{dim_string}\n-• Total Weight: {lbs_final:,.2f} LBS | {kgs_final:,.2f} KGS\n-• Commodity: {commodity}\n-• Value: {cargo_value}\n-• Incoterms: {incoterms}\n\nThank you for your help."
 
                 st.divider()
                 col1, col2 = st.columns(2)
@@ -314,7 +314,7 @@ else:
 
     # --- TOOL 2: INVOICE EXTRACTOR ---
     elif st.session_state.active_tool == "Invoice Extractor":
-        st.title("🧾 Data Extractor")
+        st.title("🧾 Logistics Paperwork Generator")
         
         c1, c2 = st.columns(2)
         with c1: sap_file = st.file_uploader("1. Upload SAP Export", type=['csv', 'xlsx'])
