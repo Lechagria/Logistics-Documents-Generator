@@ -6,6 +6,8 @@ import datetime
 import os
 import re
 from openpyxl import load_workbook
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import NameObject
 
 # ==========================================
 # 1. PAGE CONFIG & THEME
@@ -211,6 +213,88 @@ def fill_ausfta_template(bol, name_printed, po_number):
     wb.save(buf)
     return buf.getvalue(), None
 
+
+def fill_cusma_template(df_detailed, po_number, name, year):
+    """
+    Fills the CUSMA Certificate of Origin PDF.
+    Returns (bytes, error, overflow_items).
+    overflow_items is a list of descriptions that could not fit (empty if all fit).
+    """
+    template_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "CUSMA_form_2022.pdf"
+    )
+    if not os.path.exists(template_path):
+        return None, "Template file **\'CUSMA_form_2022.pdf\'** not found next to main_code.py.", []
+
+    try:
+        reader = PdfReader(template_path)
+        writer = PdfWriter()
+        writer.append(reader)
+    except Exception as e:
+        return None, f"Could not open CUSMA template: {e}", []
+
+    # ── Build unique line items (deduplicated by Description + HTS) ────────
+    seen = set()
+    descriptions, hs_codes, origins, countries = [], [], [], []
+    for _, row in df_detailed.iterrows():
+        key = (str(row["Description"]).strip(), str(row["HTS Code"]).strip())
+        if key not in seen:
+            seen.add(key)
+            descriptions.append(str(row["Description"]).strip())
+            hs_codes.append(str(row["HTS Code"]).strip())
+            origins.append("A")
+            countries.append(str(row["Origin"]).strip())
+
+    # ── Overflow check ─────────────────────────────────────────────────────
+    # Auto-size is enabled on all fields; ~40 lines is the practical
+    # readability limit before font becomes too small to read comfortably.
+    MAX_LINES   = 40
+    overflow    = []
+    if len(descriptions) > MAX_LINES:
+        overflow     = descriptions[MAX_LINES:]
+        descriptions = descriptions[:MAX_LINES]
+        hs_codes     = hs_codes[:MAX_LINES]
+        origins      = origins[:MAX_LINES]
+        countries    = countries[:MAX_LINES]
+
+    # ── Date & period ──────────────────────────────────────────────────────
+    today    = datetime.date.today()
+    yr_short = str(year)[2:]   # e.g. "26"
+
+    fields = {
+        "Exporter":        "MONAT GLOBAL CORP\n10000 NW 15th TERR\nDORAL, FL 33172",
+        "From":            f"01-01-{yr_short}",
+        "To":              f"31-12-{yr_short}",
+        "Invoice":         str(po_number),
+        "Producer":        "AVAILABLE TO CUSTOM UPON REQUEST",
+        "Importer":        "MONAT GLOBAL CANADA UCL\n135 SPARKS AVE\nTORONTO ON M2H2S5\nCANADA",
+        "Description":     "\n".join(descriptions),
+        "HS Tariff":       "\n".join(hs_codes),
+        "Origin":          "\n".join(origins),
+        "CountryOfOrigin": "\n".join(countries),
+        "Company":         "MONAT GLOBAL CORP",
+        "Name":            name,
+        "Title":           "PLANNER, DEMAND & FORECAST",
+        "Date":            today.strftime("%d-%m-%y"),
+        "Tel":             "(786) 716-3210",
+        "Email":           "",
+        "Fax":             "",
+    }
+
+    writer.update_page_form_field_values(writer.pages[0], fields)
+
+    # ── Tick Exporter checkbox ─────────────────────────────────────────────
+    for page in writer.pages:
+        if "/Annots" in page:
+            for annot in page["/Annots"]:
+                obj = annot.get_object()
+                if obj.get("/T") == "Check Box1":
+                    obj.update({NameObject("/V"): NameObject("/Yes"), NameObject("/AS"): NameObject("/Yes")})
+
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue(), None, overflow
+
 # ==========================================
 # 3. DASHBOARD / TOOL SELECTION (CENTER)
 # ==========================================
@@ -239,7 +323,8 @@ if st.session_state.active_tool is None:
 else:
     if st.sidebar.button("⬅️ Back to Portal"):
         for key in ['df_detailed', 'ci_filled_bytes', 'vgw_filled_bytes',
-                    'vgw_container_label', 'pd_filled_bytes', 'ausfta_filled_bytes']:
+                    'vgw_container_label', 'pd_filled_bytes', 'ausfta_filled_bytes',
+                    'cusma_filled_bytes']:
             if key in st.session_state: del st.session_state[key]
         st.session_state.active_tool = None
         st.rerun()
@@ -570,3 +655,59 @@ else:
                             file_name=f"AUSFTA_Declaration_{po_tag}_{datetime.date.today().strftime('%Y%m%d')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
+
+            # ── CANADA DOCUMENTS: only shown when Canada is selected ───────────
+            if selected_dest == "🇨🇦 Canada":
+                st.divider()
+                st.subheader("🇨🇦 Canada Documents")
+
+                po_number_can = ", ".join(str(p) for p in st.session_state.df_detailed['PO#'].dropna().unique())
+                st.info(f"📎 Invoice & Reference Number: **{po_number_can}** (from SAP export)")
+
+                # ── Shared inputs ──────────────────────────────────────────────
+                can_col_a, can_col_b = st.columns(2)
+                with can_col_a:
+                    can_shared_name = st.text_input(
+                        "Name Printed",
+                        placeholder="e.g. Kevin Alvarez",
+                        key="can_shared_name"
+                    )
+                with can_col_b:
+                    current_year = datetime.date.today().year
+                    can_year = st.selectbox(
+                        "Certificate Year",
+                        options=list(range(current_year, current_year + 10)),
+                        key="can_year"
+                    )
+
+                if st.button("✍️ Fill CUSMA Certificate of Origin"):
+                    if not can_shared_name:
+                        st.warning("⚠️ Please enter a Name before generating.")
+                    else:
+                        if 'cusma_filled_bytes' in st.session_state:
+                            del st.session_state.cusma_filled_bytes
+
+                        cusma_bytes, err, overflow = fill_cusma_template(
+                            st.session_state.df_detailed, po_number_can, can_shared_name, can_year
+                        )
+
+                        if err:
+                            st.error(f"❌ {err}")
+                        else:
+                            st.session_state.cusma_filled_bytes = cusma_bytes
+                            if overflow:
+                                st.warning(
+                                    f"⚠️ **{len(overflow)} item(s) could not fit** in the form and must be added manually:\n\n"
+                                    + "\n".join(f"- {item}" for item in overflow)
+                                )
+                            else:
+                                st.success("✅ CUSMA Certificate filled! Click below to download.")
+
+                if 'cusma_filled_bytes' in st.session_state:
+                    po_tag = po_number_can.replace(", ", "_")
+                    st.download_button(
+                        "📥 Download CUSMA Certificate of Origin",
+                        data=st.session_state.cusma_filled_bytes,
+                        file_name=f"CUSMA_Certificate_{po_tag}_{datetime.date.today().strftime('%Y%m%d')}.pdf",
+                        mime="application/pdf"
+                    )
