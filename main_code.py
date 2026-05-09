@@ -499,9 +499,15 @@ else:
 
             # ── SLI Export + Commercial Invoice ───────────────────────────────
             st.divider()
-            col_dl1, col_dl2 = st.columns(2)
 
-            with col_dl1:
+            # Destination drives layout and all downstream section visibility
+            selected_dest     = st.selectbox("Select Destination", options=list(INVOICE_DESTINATIONS.keys()), key="ci_destination")
+            template_filename = INVOICE_DESTINATIONS[selected_dest]
+            row_count         = len(st.session_state.df_detailed)
+            SLI_EXCLUDED      = ["🇨🇦 Canada", "🇲🇽 Mexico"]
+
+            # SLI — hidden for Canada and Mexico
+            if selected_dest not in SLI_EXCLUDED:
                 st.subheader("📊 SLI Export")
                 excel_buf = io.BytesIO()
                 with pd.ExcelWriter(excel_buf, engine='openpyxl') as writer:
@@ -511,37 +517,34 @@ else:
                     "📥 Download SLI Excel", excel_buf.getvalue(), "SLI_Invoice.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
+                st.divider()
 
-            with col_dl2:
-                st.subheader("📄 Commercial Invoice")
-                selected_dest    = st.selectbox("Select Destination", options=list(INVOICE_DESTINATIONS.keys()), key="ci_destination")
-                template_filename = INVOICE_DESTINATIONS[selected_dest]
-                row_count        = len(st.session_state.df_detailed)
+            # Commercial Invoice — always shown
+            st.subheader("📄 Commercial Invoice")
+            if row_count > CI_MAX_ROWS:
+                st.warning(
+                    f"⚠️ This shipment has **{row_count} SKUs**, which exceeds the "
+                    f"**{CI_MAX_ROWS}-row** template capacity. Please fill this invoice manually."
+                )
+            else:
+                if st.button("✍️ Fill Commercial Invoice Template"):
+                    if 'ci_filled_bytes' in st.session_state: del st.session_state.ci_filled_bytes
+                    ci_bytes, err = fill_commercial_invoice_template(st.session_state.df_detailed, template_filename)
+                    if err: st.error(f"❌ {err}")
+                    else:
+                        st.session_state.ci_filled_bytes  = ci_bytes
+                        st.session_state.ci_dest_label    = selected_dest
+                        st.success("✅ Invoice filled! Click below to download.")
 
-                if row_count > CI_MAX_ROWS:
-                    st.warning(
-                        f"⚠️ This shipment has **{row_count} SKUs**, which exceeds the "
-                        f"**{CI_MAX_ROWS}-row** template capacity. Please fill this invoice manually."
+                if 'ci_filled_bytes' in st.session_state:
+                    po_str   = "_".join(str(p) for p in st.session_state.df_detailed['PO#'].dropna().unique())
+                    dest_tag = template_filename.replace("Commercial_Invoice_", "").replace(".xlsx", "")
+                    st.download_button(
+                        "📥 Download Commercial Invoice",
+                        data=st.session_state.ci_filled_bytes,
+                        file_name=f"Commercial_Invoice_{dest_tag}_{po_str}_{datetime.date.today().strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
-                else:
-                    if st.button("✍️ Fill Commercial Invoice Template"):
-                        if 'ci_filled_bytes' in st.session_state: del st.session_state.ci_filled_bytes
-                        ci_bytes, err = fill_commercial_invoice_template(st.session_state.df_detailed, template_filename)
-                        if err: st.error(f"❌ {err}")
-                        else:
-                            st.session_state.ci_filled_bytes  = ci_bytes
-                            st.session_state.ci_dest_label    = selected_dest
-                            st.success("✅ Invoice filled! Click below to download.")
-
-                    if 'ci_filled_bytes' in st.session_state:
-                        po_str   = "_".join(str(p) for p in st.session_state.df_detailed['PO#'].dropna().unique())
-                        dest_tag = template_filename.replace("Commercial_Invoice_", "").replace(".xlsx", "")
-                        st.download_button(
-                            "📥 Download Commercial Invoice",
-                            data=st.session_state.ci_filled_bytes,
-                            file_name=f"Commercial_Invoice_{dest_tag}_{po_str}_{datetime.date.today().strftime('%Y%m%d')}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
 
             # ── VGW DECLARATION (EU, UK, APAC only) ──────────────────────────
             VGW_DESTINATIONS = ["🇪🇺 Europe (EU)", "🇬🇧 United Kingdom", "🇦🇺 Australia / APAC"]
